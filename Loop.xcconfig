@@ -8,7 +8,7 @@
 
 // This is automatically disambiguated by development team, but you may choose to change this to
 // support running multiple apps simultaneously.
-MAIN_APP_BUNDLE_IDENTIFIER = com.${DEVELOPMENT_TEAM}.loopkit
+MAIN_APP_BUNDLE_IDENTIFIER = com.uriBregman.loopkit.basal
 
 // Application name [DEFAULT]
 MAIN_APP_DISPLAY_NAME = Loop
@@ -43,7 +43,7 @@ LOOP_PROVISIONING_PROFILE_SPECIFIER_WATCHAPP_RELEASE =
 LOOP_PROVISIONING_PROFILE_SPECIFIER_WATCHAPP_EXTENSION_RELEASE =
 
 // Min iOS Version [DEFAULT]					
-IPHONEOS_DEPLOYMENT_TARGET = 16.2
+IPHONEOS_DEPLOYMENT_TARGET = 26.0
 
 // Base string for opening app via URL [DEFAULT]
 URL_SCHEME_NAME = $(MAIN_APP_DISPLAY_NAME)

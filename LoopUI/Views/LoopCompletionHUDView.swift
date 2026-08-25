@@ -30,6 +30,22 @@ public final class LoopCompletionHUDView: BaseHUDView {
         updateDisplay(nil)
     }
 
+    /// Centres the loop icon within this view.
+    ///
+    /// The nib pins the 44pt `LoopStateView` 10pt from the top of a 44pt box, so
+    /// the icon actually hangs 10pt BELOW its own container. That is invisible in
+    /// the flat bar, but inside a glass ring it left the icon dangling outside
+    /// the circle — centring the container alone could not fix it, because the
+    /// container was never where the icon was.
+    public func centerLoopStateView() {
+        for constraint in constraints
+        where (constraint.firstItem === loopStateView && constraint.firstAttribute == .top)
+            || (constraint.secondItem === loopStateView && constraint.secondAttribute == .top) {
+            constraint.isActive = false
+        }
+        loopStateView.centerYAnchor.constraint(equalTo: centerYAnchor).isActive = true
+    }
+
     public var loopIconClosed = false {
         didSet {
             loopStateView.open = !loopIconClosed

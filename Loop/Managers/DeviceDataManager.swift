@@ -23,6 +23,13 @@ final class DeviceDataManager {
 
     let pluginManager: PluginManager
     weak var alertManager: AlertManager!
+    /// User-configurable Loop-side alerts (glucose rate/trend, low insulin).
+    let customAlertMonitor = CustomAlertMonitor()
+
+    /// Durable, opt-in history log. Write-only: it observes the same callbacks
+    /// Loop already handles and never feeds anything back. Loop's own stores keep
+    /// ~7 days, so anything not written here is eventually lost for good.
+    let historyLogger = HistoryLogger.shared
     let bluetoothProvider: BluetoothProvider
     weak var onboardingManager: OnboardingManager?
 
@@ -274,6 +281,21 @@ final class DeviceDataManager {
         self.cacheStore = cacheStore
         self.settingsManager = settingsManager
 
+        // Follower feed (Stage F2/F4): give the publisher a way to read therapy
+        // settings without it holding a reference to a device manager. Weak, so
+        // this cannot keep `settingsManager` alive, and read only on the
+        // publisher's own queue long after any dose decision.
+        //
+        // Costs nothing when the feed is off, which is the default — the closure
+        // is never called unless a status record is being written.
+        // `FollowerPublisher` is @MainActor and this initialiser is not, so the
+        // wiring hops. Deliberately not `await`ed — nothing here depends on it
+        // having happened, and the publisher simply omits the settings snapshot
+        // until it has.
+        Task { @MainActor [weak settingsManager] in
+            FollowerPublisher.shared.settingsProvider = { settingsManager?.loopSettings }
+        }
+
         let absorptionTimes = LoopCoreConstants.defaultCarbAbsorptionTimes
         let sensitivitySchedule = settingsManager.latestSettings.insulinSensitivitySchedule
 
@@ -357,6 +379,13 @@ final class DeviceDataManager {
 
         crashRecoveryManager = CrashRecoveryManager(alertIssuer: alertManager)
         alertManager.addAlertResponder(managerIdentifier: crashRecoveryManager.managerIdentifier, alertResponder: crashRecoveryManager)
+        // Without this nothing routes an acknowledgement back to the custom
+        // alerts, so tapping OK on one did not snooze it.
+        alertManager.addAlertResponder(managerIdentifier: CustomAlertMonitor.managerIdentifier,
+                                       alertResponder: customAlertMonitor)
+
+        // Make the bundled custom-alert tones playable by the "Loop" custom alerts.
+        alertManager.addAlertSoundVendor(managerIdentifier: CustomAlertMonitor.managerIdentifier, soundVendor: LoopSoundVendor())
 
         if let pumpManagerRawValue = rawPumpManager ?? UserDefaults.appGroup?.legacyPumpManagerRawValue {
             pumpManager = pumpManagerFromRawValue(pumpManagerRawValue)
@@ -580,6 +609,11 @@ final class DeviceDataManager {
     private func processCGMReadingResult(_ manager: CGMManager, readingResult: CGMReadingResult, completion: @escaping () -> Void) {
         switch readingResult {
         case .newData(let values):
+            // Custom Loop-side glucose alerts (high/low, rate, sustained trend).
+            // Read-only. The display unit only phrases the alert body.
+            customAlertMonitor.processNewGlucose(values, issuer: alertManager,
+                                                 displayUnit: displayGlucosePreference.unit)
+            historyLogger.record(glucose: values)
             loopManager.addGlucoseSamples(values) { result in
                 if !values.isEmpty {
                     DispatchQueue.main.async {
@@ -1078,6 +1112,11 @@ extension DeviceDataManager: PumpManagerDelegate {
         log.default("PumpManager:%{public}@ did update state", String(describing: type(of: pumpManager)))
 
         rawPumpManager = pumpManager.rawValue
+
+        // Durable history: catches a finished pod session before the pump manager
+        // overwrites its only saved copy. Deduped by pod identity, so calling it
+        // on every state update is safe and doubles as the after-relaunch catch-up.
+        historyLogger.observePumpState(pumpManager.rawValue)
     }
     
     func pumpManager(_ pumpManager: PumpManager, didRequestBasalRateScheduleChange basalRateSchedule: BasalRateSchedule, completion: @escaping (Error?) -> Void) {
@@ -1221,6 +1260,11 @@ extension DeviceDataManager: PumpManagerDelegate {
         dispatchPrecondition(condition: .onQueue(queue))
         log.default("PumpManager:%{public}@ hasNewPumpEvents (lastReconciliation = %{public}@)", String(describing: type(of: pumpManager)), String(describing: lastReconciliation))
 
+        // Durable history: doses, and the pod-change event that DoseStore will
+        // eventually purge. Recorded before the store call so a store failure
+        // can't cost us the only copy.
+        historyLogger.record(pumpEvents: events)
+
         doseStore.addPumpEvents(events, lastReconciliation: lastReconciliation, replacePendingEvents: replacePendingEvents) { (error) in
             if let error = error {
                 self.log.error("Failed to addPumpEvents to DoseStore: %{public}@", String(describing: error))
@@ -1237,6 +1281,9 @@ extension DeviceDataManager: PumpManagerDelegate {
     func pumpManager(_ pumpManager: PumpManager, didReadReservoirValue units: Double, at date: Date, completion: @escaping (_ result: Swift.Result<(newValue: ReservoirValue, lastValue: ReservoirValue?, areStoredValuesContinuous: Bool), Error>) -> Void) {
         dispatchPrecondition(condition: .onQueue(queue))
         log.default("PumpManager:%{public}@ did read reservoir value", String(describing: type(of: pumpManager)))
+
+        // Custom Loop-side low-insulin thresholds. Read-only.
+        customAlertMonitor.processReservoir(units: units, issuer: alertManager)
 
         loopManager.addReservoirValue(units, at: date) { (result) in
             switch result {

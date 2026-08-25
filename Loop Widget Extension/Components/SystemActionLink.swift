@@ -19,7 +19,8 @@ struct SystemActionLink: View {
         case bolus = "manual-bolus"
         case preMeal = "pre-meal-preset"
         case customPreset = "custom-presets"
-        
+        case aiMeal = "ai-meal"
+
         var deeplink: URL {
             URL(string: "loop://\(rawValue)")!
         }
@@ -43,6 +44,8 @@ struct SystemActionLink: View {
             return active ? Color("WidgetBackground") : Color("fresh")
         case .customPreset:
             return active ? Color("WidgetBackground") : Color("glucose")
+        case .aiMeal:
+            return Color("fresh")
         }
     }
     
@@ -59,6 +62,8 @@ struct SystemActionLink: View {
                 active ? Color("fresh") : Color("WidgetSecondaryBackground")
             case .customPreset:
                 active ? Color("glucose") : Color("WidgetSecondaryBackground")
+            case .aiMeal:
+                Color("WidgetSecondaryBackground")
             }
         }
     }
@@ -73,12 +78,16 @@ struct SystemActionLink: View {
             return Image("premeal")
         case .customPreset:
             return Image("workout")
+        case .aiMeal:
+            return Image(systemName: "sparkles")
         }
     }
-    
+
     var body: some View {
         Link(destination: destination.deeplink) {
             icon
+                // SF Symbol (aiMeal) needs a font to size up like the asset icons.
+                .font(destination == .aiMeal ? .title2 : nil)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .foregroundColor(foregroundColor(active: active))
                 .background(backgroundColor(active: active))

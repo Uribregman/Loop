@@ -57,9 +57,17 @@ struct AlertManagementView: View {
         )
     }
 
-    public init(checker: AlertPermissionsChecker, alertMuter: AlertMuter = AlertMuter()) {
+    /// Passed straight through to `CustomAlertsView`, whose high/low alert levels
+    /// are the first place a user types an absolute glucose value. Not taken from
+    /// the environment: this view is pushed without `displayGlucosePreference`
+    /// injected, so an `@EnvironmentObject` would crash.
+    private let displayGlucoseUnit: HKUnit
+
+    public init(checker: AlertPermissionsChecker, alertMuter: AlertMuter = AlertMuter(),
+                displayGlucoseUnit: HKUnit = .milligramsPerDeciliter) {
         self.checker = checker
         self.alertMuter = alertMuter
+        self.displayGlucoseUnit = displayGlucoseUnit
     }
 
     var body: some View {
@@ -71,8 +79,10 @@ struct AlertManagementView: View {
             if FeatureFlags.missedMealNotifications {
                 missedMealAlertSection
             }
+            customAlertsSection
         }
         .navigationTitle(NSLocalizedString("Alert Management", comment: "Title of alert management screen"))
+        .loopSoftTopEdge()
     }
     
     private var footerView: some View {
@@ -244,6 +254,16 @@ struct AlertManagementView: View {
             buttons: muteAlertDurationOptions)
     }
     
+    private var customAlertsSection: some View {
+        Section(footer: DescriptiveText(label: NSLocalizedString("Add your own alerts for high and low glucose, fast glucose changes, sustained trends, and low pod insulin.", comment: "Description of custom alerts row."))) {
+            NavigationLink {
+                CustomAlertsView(displayGlucoseUnit: displayGlucoseUnit)
+            } label: {
+                Text("Custom Alerts", comment: "Row opening the custom alerts screen")
+            }
+        }
+    }
+
     private var missedMealAlertSection: some View {
         Section(footer: DescriptiveText(label: NSLocalizedString("When enabled, Loop can notify you when it detects a meal that wasn't logged.", comment: "Description of missed meal notifications."))) {
             Toggle(NSLocalizedString("Missed Meal Notifications", comment: "Title for missed meal notifications toggle"), isOn: missedMealNotificationsEnabled)

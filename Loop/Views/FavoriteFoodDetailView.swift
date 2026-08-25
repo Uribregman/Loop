@@ -68,6 +68,7 @@ public struct FavoriteFoodDetailView: View {
             }
             .insetGroupedListStyle()
             .navigationTitle(food.title)
+            .loopSoftTopEdge()
         }
     }
 }

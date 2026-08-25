@@ -1,3 +1,4 @@
+
 //
 //  StatusTableViewController.swift
 //  Naterade
@@ -50,7 +51,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         super.viewDidLoad()
         
         setupToolbarItems()
-        
+
         tableView.register(BolusProgressTableViewCell.nib(), forCellReuseIdentifier: BolusProgressTableViewCell.className)
         tableView.register(AlertPermissionsDisabledWarningCell.self, forCellReuseIdentifier: AlertPermissionsDisabledWarningCell.className)
         tableView.register(MuteAlertsWarningCell.self, forCellReuseIdentifier: MuteAlertsWarningCell.className)
@@ -158,12 +159,329 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     private var appearedOnce = false
 
+    // MARK: - Floating status bar (Liquid Glass)
+
+    /// The CGM / loop / pump bar. Hosted OUTSIDE the table so it stays fixed to
+    /// the top instead of scrolling away with the charts.
+    ///
+    /// It lives in the navigation controller's view: this is a
+    /// `UITableViewController`, so `view` IS the scrolling table and anything
+    /// added there would scroll.
+    private lazy var floatingHUDView: StatusBarHUDView = {
+        let hud = StatusBarHUDView(frame: .zero)
+        hud.translatesAutoresizingMaskIntoConstraints = false
+        return hud
+    }()
+
+    /// The action island, hosted next to the status pills rather than as a table
+    /// row, so it is pinned to the top with them.
+    private lazy var islandHostingController: UIHostingController<ActionIslandView> = {
+        let controller = UIHostingController(rootView: ActionIslandView(items: []))
+        controller.view.translatesAutoresizingMaskIntoConstraints = false
+        // Must be clear, or it paints an opaque box behind the glass capsule.
+        controller.view.backgroundColor = .clear
+        controller.view.setContentHuggingPriority(.required, for: .vertical)
+        controller.view.isOpaque = false
+        // Starts hidden: an empty island still occupies its padding AND the
+        // header stack's spacing, which showed up as dead white space above the
+        // charts whenever nothing was active.
+        //
+        // ⚠️ Hidden, NOT transparent. Fading a view that contains
+        // `.glassEffect` composites it offscreen, where the glass has no
+        // backdrop to sample and renders dark until the fade finishes — that is
+        // the dark flash the island used to show as it appeared. Alpha stays at
+        // 1 for the view's whole life; the reveal is the stack's height change.
+        controller.view.isHidden = true
+        controller.view.alpha = 1
+        return controller
+    }()
+
+    /// Status pills + island as one fixed top header.
+    private lazy var floatingHeaderView: UIStackView = {
+        let stack = UIStackView(arrangedSubviews: [floatingHUDView, islandHostingController.view])
+        stack.axis = .vertical
+        // ZERO, deliberately. The gap above the island is drawn INSIDE the
+        // island's own view (see `ActionIslandView.topGap`): as stack spacing it
+        // sat outside the hosting view's bounds, and UIKit refuses touches
+        // outside those bounds — which silently clipped the top of every
+        // element's hit area.
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        // Transparent so the charts pass UNDER the glass instead of being cut off
+        // at an opaque edge. The white is the table showing through, so it still
+        // matches the charts when nothing is scrolled behind it.
+        stack.backgroundColor = .clear
+        return stack
+    }()
+
+    private func installFloatingHeaderIfNeeded() {
+        guard floatingHeaderView.superview == nil, let host = navigationController?.view else { return }
+
+        // Deliberately NOT `addChild`: the header lives in the navigation
+        // controller's view, i.e. outside this view controller's own hierarchy,
+        // and UIKit raises an exception when a child view controller's view is
+        // installed outside its parent's tree. The lazy property keeps the
+        // hosting controller alive, which is all this static view needs.
+        host.addSubview(floatingHeaderView)
+
+        NSLayoutConstraint.activate([
+            floatingHeaderView.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            floatingHeaderView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            // Pinned to the very top, NOT the safe area, so the header's white
+            // background covers the status-bar strip the way a navigation bar
+            // does. The pills position themselves against the safe area inside.
+            floatingHeaderView.topAnchor.constraint(equalTo: host.topAnchor),
+        ])
+
+        // The bar grows and shrinks with the pump lifecycle line, and that
+        // changes how much scroll inset has to be reserved beneath it.
+        floatingHUDView.onHeightChange = { [weak self] in
+            // Order matters: set the gap first, then measure — the inset is
+            // derived from the header's height, which the gap changes.
+            self?.updateIslandSpacing()
+            // A discrete one-off change (an expiry line appeared or vanished),
+            // so the content should hold its place rather than jump. This is the
+            // ONLY caller allowed to move the scroll position from here; the
+            // island's own animation owns it during a show/hide.
+            self?.updateFloatingHeaderInset(adjustingOffset: true)
+        }
+        updateIslandSpacing()
+
+        // Wires gesture recognizers, state colors and the initial values.
+        hudView = floatingHUDView
+    }
+
+    /// Gap between the status pills and the island below them.
+    private static let islandGapWithoutLine: CGFloat = 14
+    /// Wider when an expiry line is showing, so the island clears the line
+    /// rather than sitting right under it.
+    private static let islandGapWithLine: CGFloat = 22
+
+    /// The gap currently used BOTH above the island (the stack's spacing) and
+    /// below it (the SwiftUI view's own bottom padding). One value, so the
+    /// island always sits with equal air on each side.
+    private var currentIslandGap: CGFloat {
+        floatingHUDView.showsLifecycleLine ? Self.islandGapWithLine : Self.islandGapWithoutLine
+    }
+
+    /// The gap the island is currently drawing above and below itself.
+    private var renderedIslandGap: CGFloat = StatusTableViewController.islandGapWithoutLine
+
+    private func updateIslandSpacing() {
+        let gap = currentIslandGap
+        guard renderedIslandGap != gap else { return }
+        renderedIslandGap = gap
+        // The island owns BOTH gaps, so it has to be told the new value.
+        rebuildIslandRootView()
+    }
+
+    /// Push the current items AND the current gaps into the hosted SwiftUI view.
+    private func rebuildIslandRootView() {
+        islandHostingController.rootView = ActionIslandView(items: renderedIslandItems,
+                                                            topGap: currentIslandGap,
+                                                            bottomGap: currentIslandGap) { [weak self] item in
+            self?.handleIslandTap(item)
+        }
+        islandHostingController.view.backgroundColor = .clear
+    }
+
+    /// Reserve the header's height so the charts start below it.
+    ///
+    /// Deliberately does NOT force layout. The header lives in the navigation
+    /// controller's view, so `layoutIfNeeded()` here walks up and re-lays out
+    /// that whole tree — including this table — and calling it from
+    /// `viewDidLayoutSubviews` (i.e. on every layout pass) made returning from a
+    /// settings screen take seconds. Forced layout happens once, in
+    /// `updateIslandItems`, and only when the island actually appears or
+    /// disappears.
+    /// - Parameter adjustingOffset: opt-IN, and deliberately defaulted to FALSE.
+    ///
+    ///   `viewDidLayoutSubviews` calls this on every layout pass — including on
+    ///   every intermediate frame of the island's spring animation. With
+    ///   compensation on by default it nudged `contentOffset` on each of those
+    ///   frames, and the nudges COMPOUNDED: cancelling a bolus scrolled the
+    ///   Glucose header clean up behind the status pills.
+    ///
+    ///   Only a caller that knows a discrete, one-off height change just
+    ///   happened may ask for compensation. Anything driven by layout must not.
+    @discardableResult
+    private func updateFloatingHeaderInset(adjustingOffset: Bool = false) -> CGFloat {
+        // The header spans from y=0, so its height already includes the status
+        // bar. `contentInset` is ADDED to the scroll view's safe-area inset, so
+        // only the part below the safe area must be reserved here.
+        // Measure AFTER layout. `frame.height` read before the header has laid
+        // out returns its previous height, which is why the spacing appeared to
+        // apply only some of the time — whichever pass happened to run first won.
+        floatingHeaderView.layoutIfNeeded()
+        let headerHeight = floatingHeaderView.isHidden ? 0 : floatingHeaderView.frame.height
+        let inset = max(0, headerHeight - tableView.safeAreaInsets.top)
+        let previous = tableView.contentInset.top
+        guard abs(previous - inset) > 0.5 else { return previous }
+
+        // Changing `contentInset.top` shoves the content down by the same amount,
+        // which is the jump seen when the island appears or disappears. Move the
+        // offset by the opposite delta so the content stays visually still —
+        // unless the user was already at the top, where it should stay pinned.
+        let wasAtTop = tableView.contentOffset.y <= -previous + 1
+        tableView.contentInset.top = inset
+        tableView.verticalScrollIndicatorInsets.top = inset
+        guard adjustingOffset else { return inset }
+        if wasAtTop {
+            tableView.contentOffset.y = -inset
+        } else {
+            tableView.contentOffset.y -= (inset - previous)
+        }
+        return inset
+    }
+
+    /// The items currently rendered by the island, so an unchanged reload is a
+    /// no-op instead of rebuilding the SwiftUI view. `reloadData` runs often.
+    private var renderedIslandItems: [ActionIslandItem] = []
+
+    /// How long the island takes to expand in / collapse out.
+    private static let islandRevealDuration: TimeInterval = 0.34
+
+    /// How far from the top still counts as "at the top" when deciding whether
+    /// the content should follow the header as the island appears. Roughly one
+    /// island's height, so a small scroll nudge doesn't change the behaviour.
+    private static let topFollowThreshold: CGFloat = 80
+
+    /// Push the current island items into the hosted SwiftUI view.
+    ///
+    /// - Parameter animated: `false` when arriving on the screen, so the island
+    ///   is simply already in its correct state rather than animating on entry.
+    private func updateIslandItems(animated: Bool = true) {
+        let items = shouldShowStatus ? determineIslandItems() : []
+        let shouldHide = items.isEmpty
+
+        // Evaluated BEFORE the unchanged-items short circuit. Both start empty,
+        // so an early return here left the empty hosting view visible, taking up
+        // the header stack's spacing and its own padding for nothing.
+        let visibilityChanged = islandHostingController.view.isHidden != shouldHide
+
+        guard items != renderedIslandItems || visibilityChanged else { return }
+        renderedIslandItems = items
+
+        // Content first, so the pill expands with its final contents already
+        // laid out instead of growing and then filling in.
+        rebuildIslandRootView()
+
+        // Only the appear/disappear transition changes the header's height, so
+        // that is the only case that needs a re-measure.
+        guard visibilityChanged else { return }
+
+        // Captured before the inset changes. If the content was at — or near —
+        // the top, it follows the header down as the island expands; otherwise
+        // the header grows over content that stays put and the top elements end
+        // up overlapping the charts. Deliberately a range rather than an exact
+        // match: being nudged a little off the top is still visually "at the
+        // top", and it should behave the same.
+        let restingTop = -tableView.adjustedContentInset.top + Self.restingScrollOffset
+        let wasNearTop = tableView.contentOffset.y <= restingTop + Self.topFollowThreshold
+
+        let applyVisibility = { [weak self] in
+            guard let self else { return }
+            // A hidden arranged subview is excluded from the stack's layout —
+            // including its spacing — so animating this collapses the gap too.
+            self.islandHostingController.view.isHidden = shouldHide
+            self.floatingHeaderView.layoutIfNeeded()
+            // Inside the animation block so the charts slide with the header
+            // rather than snapping to the new inset. Offset is handled just
+            // below, by `wasNearTop`, so this must not touch it.
+            let newInset = self.updateFloatingHeaderInset(adjustingOffset: false)
+
+            // Assigning `contentOffset` inside the block scrolls with the same
+            // spring, so it reads as one motion rather than a separate jump.
+            if wasNearTop {
+                // Computed from the inset just applied, NOT from
+                // `adjustedContentInset` — that still reports the old value at
+                // this point in the pass, so the scroll overshot on cancel.
+                self.tableView.contentOffset = CGPoint(
+                    x: 0,
+                    y: -(self.tableView.safeAreaInsets.top + newInset) + Self.restingScrollOffset
+                )
+            }
+        }
+
+        guard animated else {
+            applyVisibility()
+            if wasNearTop { scrollToTop() }
+            return
+        }
+
+        UIView.animate(withDuration: Self.islandRevealDuration,
+                       delay: 0,
+                       usingSpringWithDamping: 0.86,
+                       initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState],
+                       animations: applyVisibility) { [weak self] _ in
+            // Land EXACTLY at rest, not merely near it. Everything inside the
+            // animation works from an inset predicted mid-flight; this runs once
+            // the animation is over, when `adjustedContentInset` is finally
+            // truthful, and snaps the content to the real top. Without it the
+            // island's disappearance left the content a little short of the top
+            // rather than settled against it.
+            guard wasNearTop else { return }
+            self?.scrollToTop()
+        }
+    }
+
+    /// Set when the screen is about to appear, so the charts are returned to the
+    /// top rather than wherever they were left scrolled.
+    private var needsScrollToTop = false
+
+    /// How far past the top of the scroll range to rest.
+    ///
+    /// Zero: the content rests fully clear of the floating header, with nothing
+    /// tucked underneath it. A positive value scrolls the content up so the top
+    /// of the glucose chart slides under the status pills, which is explicitly
+    /// not wanted — the top elements must not overlap anything at rest.
+    private static let restingScrollOffset: CGFloat = 0
+
+    /// Rests the content just past the top of its scroll range.
+    /// `adjustedContentInset` already accounts for the floating header.
+    private func scrollToTop() {
+        let top = -tableView.adjustedContentInset.top + Self.restingScrollOffset
+        guard abs(tableView.contentOffset.y - top) > 0.5 else { return }
+        tableView.setContentOffset(CGPoint(x: 0, y: top), animated: false)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateFloatingHeaderInset()
+
+        // Deferred to here, not `viewWillAppear`: the header's height — and so
+        // the content inset the top position is measured from — is not settled
+        // until layout has run.
+        if needsScrollToTop {
+            needsScrollToTop = false
+            scrollToTop()
+        }
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
 
         navigationController?.setNavigationBarHidden(true, animated: animated)
         navigationController?.setToolbarHidden(false, animated: animated)
-        
+
+        installFloatingHeaderIfNeeded()
+        // ⚠️ NOT shown here. `viewWillAppear` fires the moment an interactive
+        // back-swipe BEGINS, and the header is hosted by the navigation
+        // controller so it does not travel with the transition — showing it now
+        // paints the home pills on top of the screen you are still leaving.
+        // Shown in `viewDidAppear` instead; see `syncFloatingHeaderVisibility`.
+        floatingHUDView.isHidden = !shouldShowHUD
+        // Not animated: arriving on the screen should find the island already in
+        // its correct state, not animating into it.
+        updateIslandItems(animated: false)
+        refreshDeviceStatusHUD()
+        needsScrollToTop = true
+
+        // Same white as the charts, so the strip behind the bottom menu matches.
+        navigationController?.view.backgroundColor = .systemBackground
+        tableView.backgroundColor = .systemBackground
+
         updateToolbarItems()
 
         alertPermissionsChecker.checkNow()
@@ -195,9 +513,57 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         onscreen = true
 
+        // Only now — the transition has actually completed and we really are the
+        // visible screen. A cancelled swipe never reaches here, which is exactly
+        // the behaviour we want.
+        syncFloatingHeaderVisibility(animated: animated)
+
         deviceManager.analyticsServicesManager.didDisplayStatusScreen()
 
         deviceManager.checkDeliveryUncertaintyState()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Belt and braces: if a transition ended with us NOT on top, make sure the
+        // header went with us. Cheap, and it closes the case where an interactive
+        // gesture resolves in a way the will/did pair alone did not cover.
+        syncFloatingHeaderVisibility(animated: false)
+    }
+
+    /// Single source of truth for whether the floating glass header is on screen:
+    /// **it is visible if, and only if, this controller is the top of the
+    /// navigation stack.**
+    ///
+    /// 🐛 The bug this replaces: the header was toggled in
+    /// `viewWillAppear`/`viewWillDisappear`. `viewWillAppear` fires when an
+    /// interactive back-swipe STARTS, not when it finishes — and because the
+    /// header is a subview of the navigation controller's view (see
+    /// `installFloatingHeaderIfNeeded`) it does not slide with the transition. So
+    /// starting a swipe painted the home screen's pills and island over the top
+    /// of the screen you were still on, and abandoning the swipe left them there.
+    ///
+    /// Asking "am I actually on top?" is immune to how the gesture resolves,
+    /// which a will/did callback pair is not.
+    private func syncFloatingHeaderVisibility(animated: Bool) {
+        let shouldShow = navigationController?.topViewController === self
+            && presentedViewController == nil
+        guard floatingHeaderView.isHidden == shouldShow else {
+            floatingHeaderView.alpha = 1
+            return
+        }
+
+        guard animated, shouldShow else {
+            floatingHeaderView.isHidden = !shouldShow
+            floatingHeaderView.alpha = 1
+            return
+        }
+
+        // Fade in rather than snap: the header arrives after the push/pop
+        // animation has finished, so an abrupt appearance reads as a glitch.
+        floatingHeaderView.alpha = 0
+        floatingHeaderView.isHidden = false
+        UIView.animate(withDuration: 0.2) { self.floatingHeaderView.alpha = 1 }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -205,8 +571,15 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         onscreen = false
 
+        // The bar is hosted by the navigation controller, so it would otherwise
+        // stay on screen over whatever gets pushed on top of this screen.
         if presentedViewController == nil {
             navigationController?.setNavigationBarHidden(false, animated: animated)
+            // Hide IMMEDIATELY and unanimated. This fires as a push begins, and
+            // the header must be gone before the incoming screen's top bar is
+            // drawn — a fade here is what lets both be visible together.
+            floatingHeaderView.isHidden = true
+            floatingHeaderView.alpha = 1
         }
     }
 
@@ -240,16 +613,13 @@ final class StatusTableViewController: LoopChartsTableViewController {
         didSet {
             if oldValue != bolusState {
                 switch bolusState {
-                case .inProgress(let dose):
+                case .inProgress:
                     guard case .inProgress = oldValue else {
                         // Bolus starting
                         bolusProgressReporter = deviceManager.pumpManager?.createBolusProgressReporter(reportingOn: DispatchQueue.main)
-                        // If there is an existing bolus progressCell, update its dose values now in case the app is currently in the
+                        // Refresh the island now in case the app is currently in the
                         // background as otherwise these values won't get initialized and can contain stale data from some earlier bolus.
-                        if let progressCell = tableView.cellForRow(at: IndexPath(row: StatusRow.status.rawValue, section: Section.status.rawValue)) as? BolusProgressTableViewCell {
-                            progressCell.totalUnits = dose.programmedUnits
-                            progressCell.deliveredUnits = 0
-                        }
+                        updateIslandItems()
                         break
                     }
                 default:
@@ -264,50 +634,98 @@ final class StatusTableViewController: LoopChartsTableViewController {
     private var bolusProgressReporter: DoseProgressReporter?
 
     private func updateBolusProgress() {
-        if let cell = tableView.cellForRow(at: IndexPath(row: StatusRow.status.rawValue, section: Section.status.rawValue)) as? BolusProgressTableViewCell {
-            cell.deliveredUnits = bolusProgressReporter?.progress.deliveredUnits
-        }
+        updateIslandItems()
     }
 
     private func updateHUDActive() {
         deviceManager.pumpManagerHUDProvider?.visible = active && onscreen
     }
 
+    // Indices into `toolbarItems`. The five controls are ADJACENT with no spacer
+    // items between them: on iOS 26 a toolbar draws ONE shared Liquid Glass
+    // background behind a run of adjacent items, and any space item — including
+    // `fixedSpaceItem` — deliberately breaks that run. The old layout put a
+    // flexible space between every control, which is why each icon got its own
+    // separate glass circle instead of Apple's single grouped glass menu. The
+    // only flexible spaces are the outer two, which centre the group.
+    private enum ToolbarIndex {
+        static let carbs = 1
+        static let statistics = 2
+        static let bolus = 3
+        /// The presets button. Pre-Meal used to be its own toolbar item; it now
+        /// lives in this button's menu alongside the other presets, which is
+        /// where it belongs — they are mutually exclusive overrides.
+        static let presets = 4
+        static let settings = 5
+    }
+
+    /// How much bigger the bottom-bar icons are drawn than their natural asset
+    /// size.
+    ///
+    /// This is HALF of the bottom bar's size. The other half is
+    /// `PassthroughToolbar.extraHeight`, which grows the bar (and so the glass
+    /// capsule) itself. Tune the two together — icons alone just makes bigger
+    /// glyphs inside a bar that stayed the same height.
+    ///
+    /// Scaling the image, rather than setting an appearance or using custom-view
+    /// items, is what keeps the shared Liquid Glass intact (see DESIGN_SYSTEM.md).
+    static let toolbarIconScale: CGFloat = 1.08
+
+    // Scaled ONCE, at first use. `updateToolbarItems()` runs on every loop cycle
+    // and `createPresetsButtonItem` rebuilds
+    // their item each time — so scaling inline meant re-rendering images through
+    // UIGraphicsImageRenderer on the main thread, over and over, forever.
+    private static let scaledBolusImage = UIImage(named: "bolus")?.scaled(by: toolbarIconScale)
+    private static let scaledSettingsImage = UIImage(named: "settings")?.scaled(by: toolbarIconScale)
+    private static let scaledCarbsImage = UIImage(named: "carbs")?
+        .scaled(by: toolbarIconScale)
+        .withRenderingMode(.alwaysTemplate)
+    private static let scaledPreMealImages: [Bool: UIImage] = [
+        true: UIImage.preMealImage(selected: true)?.scaled(by: toolbarIconScale),
+        false: UIImage.preMealImage(selected: false)?.scaled(by: toolbarIconScale)
+    ].compactMapValues { $0 }
+    private static let scaledWorkoutImages: [Bool: UIImage] = [
+        true: UIImage.workoutImage(selected: true)?.scaled(by: toolbarIconScale),
+        false: UIImage.workoutImage(selected: false)?.scaled(by: toolbarIconScale)
+    ].compactMapValues { $0 }
+
     private func setupToolbarItems() {
-        let space = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: self, action: nil)
-        let carbs = UIBarButtonItem(image: UIImage(named: "carbs"), style: .plain, target: self, action: #selector(userTappedAddCarbs))
-        let bolus = UIBarButtonItem(image: UIImage(named: "bolus"), style: .plain, target: self, action: #selector(presentBolusScreen))
-        let settings = UIBarButtonItem(image: UIImage(named: "settings"), style: .plain, target: self, action: #selector(onSettingsTapped))
-        
-        let preMeal = createPreMealButtonItem(selected: false, isEnabled: true)
-        let workout = createWorkoutButtonItem(selected: false, isEnabled: true)
+        let carbs = UIBarButtonItem(customView: mealButton)
+        let bolus = UIBarButtonItem(image: Self.scaledBolusImage, style: .plain, target: self, action: #selector(presentBolusScreen))
+        let settings = UIBarButtonItem(image: Self.scaledSettingsImage, style: .plain, target: self, action: #selector(onSettingsTapped))
+
+        let statistics = createStatisticsButtonItem()
+        let presets = createPresetsButtonItem(selected: false, isEnabled: true)
         toolbarItems = [
+            .flexibleSpace(),
             carbs,
-            space,
-            preMeal,
-            space,
+            statistics,
             bolus,
-            space,
-            workout,
-            space,
-            settings
+            presets,
+            settings,
+            .flexibleSpace()
         ]
     }
-        
+
     private func updateToolbarItems() {
         let isPumpOnboarded = onboardingManager.isComplete || deviceManager.pumpManager?.isOnboarded == true
 
-        toolbarItems![0].accessibilityLabel = NSLocalizedString("Add Meal", comment: "The label of the carb entry button")
-        toolbarItems![0].isEnabled = isPumpOnboarded
-        toolbarItems![0].tintColor = UIColor.carbTintColor
-        toolbarItems![4].accessibilityLabel = NSLocalizedString("Bolus", comment: "The label of the bolus entry button")
-        toolbarItems![4].isEnabled = isPumpOnboarded
-        toolbarItems![4].tintColor = UIColor.insulinTintColor
-        toolbarItems![8].accessibilityLabel = NSLocalizedString("Settings", comment: "The label of the settings button")
-        toolbarItems![8].tintColor = UIColor.secondaryLabel
-        
-        toolbarItems![2] = createPreMealButtonItem(selected: preMealMode == true && preMealModeAllowed, isEnabled: preMealModeAllowed)
-        toolbarItems![6] = createWorkoutButtonItem(selected: workoutMode == true && workoutModeAllowed, isEnabled: workoutModeAllowed)
+        toolbarItems![ToolbarIndex.carbs].accessibilityLabel = NSLocalizedString("Add Meal", comment: "The label of the carb entry button")
+        toolbarItems![ToolbarIndex.carbs].isEnabled = isPumpOnboarded
+        toolbarItems![ToolbarIndex.carbs].tintColor = UIColor.carbTintColor
+        mealButton.isEnabled = isPumpOnboarded
+        toolbarItems![ToolbarIndex.bolus].accessibilityLabel = NSLocalizedString("Bolus", comment: "The label of the bolus entry button")
+        toolbarItems![ToolbarIndex.bolus].isEnabled = isPumpOnboarded
+        toolbarItems![ToolbarIndex.bolus].tintColor = UIColor.insulinTintColor
+        toolbarItems![ToolbarIndex.settings].accessibilityLabel = NSLocalizedString("Settings", comment: "The label of the settings button")
+        toolbarItems![ToolbarIndex.settings].tintColor = UIColor.secondaryLabel
+
+        toolbarItems![ToolbarIndex.statistics].isEnabled = true
+        // Rebuilt rather than mutated so the menu picks up the current pre-meal
+        // and preset state (the menu shows which one is active).
+        toolbarItems![ToolbarIndex.presets] = createPresetsButtonItem(
+            selected: (workoutMode == true && workoutModeAllowed) || (preMealMode == true && preMealModeAllowed),
+            isEnabled: workoutModeAllowed || preMealModeAllowed)
     }
 
     public var basalDeliveryState: PumpManagerStatus.BasalDeliveryState? = nil {
@@ -659,8 +1077,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     private enum Section: Int, CaseIterable {
         case alertWarning
-        case hud
-        case status
         case charts
     }
 
@@ -749,6 +1165,268 @@ final class StatusTableViewController: LoopChartsTableViewController {
         return statusRowMode
     }
 
+    // MARK: - Action Island
+
+    /// The bolus TOTAL, which does not change mid-delivery — so it keeps the
+    /// compact form ("13 U", not "13.00 U").
+    private lazy var islandInsulinFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
+    /// The DELIVERED amount, which ticks upward continuously. Always two
+    /// fraction digits: with a 0...2 range it alternated between "2.4" and
+    /// "2.35" as delivery progressed, and since the island pill hugs its
+    /// content, that one character resized the pill and shunted the bubbles
+    /// beside it sideways on every update.
+    private lazy var islandDeliveredFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
+    /// Formats the delivered amount at a width that stays constant for the whole
+    /// bolus, by reserving room for as many integer digits as the total needs.
+    /// Without this the string still widens as delivery crosses 9.99 → 10.00.
+    /// U+2007 FIGURE SPACE is exactly one digit wide, so the padding is invisible.
+    private func islandDeliveredString(delivered: Double, total: Double) -> String? {
+        guard let deliveredString = islandDeliveredFormatter.string(from: NSNumber(value: delivered)) else {
+            return nil
+        }
+        let totalIntegerDigits = max(1, Int(floor(log10(max(abs(total), 1)))) + 1)
+        let deliveredIntegerDigits = max(1, deliveredString.prefix(while: \.isNumber).count)
+        let padding = max(0, totalIntegerDigits - deliveredIntegerDigits)
+        return String(repeating: "\u{2007}", count: padding) + deliveredString
+    }
+
+    /// The complete set of active items to render in the status island, primary first.
+    /// The primary mirrors the single `statusRowMode` (so visibility, diffing and taps are
+    /// unchanged); every other co-active state (override, stale glucose) is surfaced as a
+    /// secondary bubble, giving the Dynamic-Island-style split.
+    /// Display priority (largest first): bolus, override, no-recent-glucose.
+    private func determineIslandItems() -> [ActionIslandItem] {
+        guard let primary = islandItem(for: statusRowMode) else { return [] }
+        var items = [primary]
+        if primary.kind != .override && primary.kind != .preMeal,
+           let override = activeOverrideIslandItem(), override.id != primary.id {
+            items.append(override)
+        }
+        if primary.id != "glucose", onboardingManager.isComplete, deviceManager.isGlucoseValueStale,
+           let glucose = islandItem(for: .recommendManualGlucoseEntry) {
+            items.append(glucose)
+        }
+        return items
+    }
+
+    private func islandItem(for mode: StatusRowMode) -> ActionIslandItem? {
+        let insulinTint = Color(UIColor.insulinTintColor)
+        switch mode {
+        case .hidden:
+            return nil
+        case .enactingBolus:
+            return ActionIslandItem(id: "bolus", kind: .bolus, symbolName: "drop.fill",
+                                    title: NSLocalizedString("Starting Bolus", comment: "The title of the cell indicating a bolus is being sent"),
+                                    subtitle: nil, progress: nil, tint: insulinTint)
+        case .cancelingBolus:
+            return ActionIslandItem(id: "bolus", kind: .bolus, symbolName: "drop.fill",
+                                    title: NSLocalizedString("Canceling Bolus", comment: "The title of the cell indicating a bolus is being canceled"),
+                                    subtitle: nil, progress: nil, tint: insulinTint)
+        case .bolusing(let dose):
+            let delivered = bolusProgressReporter?.progress.deliveredUnits
+            let total = dose.programmedUnits
+            let progress: Double? = (total > 0 && delivered != nil) ? min(1, delivered! / total) : nil
+            var subtitle: String?
+            if let delivered = delivered,
+               let deliveredString = islandDeliveredString(delivered: delivered, total: total),
+               let totalString = islandInsulinFormatter.string(from: NSNumber(value: total)) {
+                subtitle = String(format: NSLocalizedString("%1$@ of %2$@ U", comment: "Bolus progress island subtitle (1: delivered units)(2: total units)"), deliveredString, totalString)
+            }
+            return ActionIslandItem(id: "bolus", kind: .bolus, symbolName: "drop.fill",
+                                    title: NSLocalizedString("Bolusing", comment: "The title of the cell indicating a bolus is in progress"),
+                                    subtitle: subtitle, progress: progress, tint: insulinTint, isActionable: true)
+        case .pumpSuspended(let resuming):
+            return ActionIslandItem(id: "suspend", kind: .pumpSuspended, symbolName: "pause.circle.fill",
+                                    title: resuming ? NSLocalizedString("Resuming", comment: "The title of the cell indicating insulin delivery is resuming") : NSLocalizedString("Insulin Suspended", comment: "The title of the cell indicating the pump is suspended"),
+                                    subtitle: resuming ? nil : NSLocalizedString("Tap to Resume", comment: "The subtitle of the cell displaying an action to resume insulin delivery"),
+                                    progress: nil, tint: Color(UIColor.warning), isActionable: !resuming)
+        case .scheduleOverrideEnabled(let override):
+            return overrideIslandItem(override)
+        case .onboardingSuspended:
+            return ActionIslandItem(id: "onboarding", kind: .info, symbolName: "exclamationmark.circle.fill",
+                                    title: NSLocalizedString("Setup Incomplete", comment: "The title of the cell indicating that onboarding is suspended"),
+                                    subtitle: NSLocalizedString("Tap to Resume", comment: "The subtitle of the cell displaying an action to resume onboarding"),
+                                    progress: nil, tint: Color(UIColor.warning), isActionable: true)
+        case .recommendManualGlucoseEntry:
+            return ActionIslandItem(id: "glucose", kind: .info, symbolName: "drop.circle",
+                                    title: NSLocalizedString("No Recent Glucose", comment: "The title of the cell indicating that there is no recent glucose"),
+                                    subtitle: NSLocalizedString("Tap to Add", comment: "The subtitle of the cell displaying an action to add a manually measurement glucose value"),
+                                    progress: nil, tint: Color(UIColor.glucoseTintColor), isActionable: true)
+        }
+    }
+
+    private func activeOverrideIslandItem() -> ActionIslandItem? {
+        if let scheduleOverride = deviceManager.loopManager.settings.scheduleOverride, !scheduleOverride.hasFinished() {
+            return overrideIslandItem(scheduleOverride)
+        } else if let preMealOverride = deviceManager.loopManager.settings.preMealOverride, !preMealOverride.hasFinished() {
+            return overrideIslandItem(preMealOverride)
+        }
+        return nil
+    }
+
+    private func overrideIslandItem(_ override: TemporaryScheduleOverride) -> ActionIslandItem {
+        let symbolName: String
+        /// A preset's own emoji replaces the generic symbol when it has one.
+        var emoji: String?
+        let title: String
+        let tint: Color
+        let kind: ActionIslandItem.Kind
+        // Every override item is tappable; what the tap DOES differs (see below).
+        let actionable: Bool
+        switch override.context {
+        // Pre-meal and workout have no editor to open — but "nothing happens"
+        // is not an acceptable answer for something that looks like a button.
+        // Tapping either ENDS it, through the same confirm-then-clear paths the
+        // toolbar buttons use (`togglePreMealMode` / `presentCustomPresets`).
+        case .preMeal:
+            symbolName = "fork.knife"
+            title = NSLocalizedString("Pre-meal", comment: "Status island title for premeal override enabled")
+            tint = Color(UIColor.carbTintColor)
+            kind = .preMeal
+            actionable = true
+        case .legacyWorkout:
+            symbolName = "figure.run"
+            title = NSLocalizedString("Workout", comment: "Status island title for workout override enabled")
+            tint = Color(UIColor.glucoseTintColor)
+            kind = .override
+            actionable = true
+        case .preset(let preset):
+            symbolName = "target"
+            // The emoji becomes the icon, so it must not also be repeated in the
+            // title — that rendered as "◎ 🏸 Name".
+            emoji = preset.symbol.isEmpty ? nil : preset.symbol
+            title = emoji == nil
+                ? String(format: NSLocalizedString("%1$@ %2$@", comment: "The format for an active custom preset. (1: preset symbol)(2: preset name)"), preset.symbol, preset.name)
+                : preset.name
+            tint = Color(UIColor.glucoseTintColor)
+            kind = .override
+            actionable = true
+        case .custom:
+            symbolName = "target"
+            title = NSLocalizedString("Custom Preset", comment: "The title of the cell indicating a generic custom preset is enabled")
+            tint = Color(UIColor.glucoseTintColor)
+            kind = .override
+            actionable = true
+        }
+
+        var subtitle: String?
+        if override.isActive() {
+            if case .finite = override.duration {
+                let endTimeText = DateFormatter.localizedString(from: override.activeInterval.end, dateStyle: .none, timeStyle: .short)
+                subtitle = String(format: NSLocalizedString("until %@", comment: "The format for the description of a custom preset end date"), endTimeText)
+            }
+        } else {
+            let startTimeText = DateFormatter.localizedString(from: override.startDate, dateStyle: .none, timeStyle: .short)
+            subtitle = String(format: NSLocalizedString("starting at %@", comment: "The format for the description of a custom preset start date"), startTimeText)
+        }
+
+        return ActionIslandItem(id: "override", kind: kind,
+                                symbolName: symbolName, emoji: emoji, title: title, subtitle: subtitle, progress: nil, tint: tint, isActionable: actionable)
+    }
+
+    private func handleIslandTap(_ item: ActionIslandItem) {
+        guard item.isActionable else { return }
+        switch item.kind {
+        case .bolus:
+            cancelActiveBolus()
+        case .pumpSuspended:
+            resumeInsulinDelivery()
+        case .override:
+            if let override = activeEditableOverride() {
+                presentEditOverride(override)
+            } else {
+                // Workout has no editor. This is the toolbar preset button's own
+                // path: it asks "Disable Preset?" first, so a stray tap on the
+                // island can't silently drop an override.
+                presentCustomPresets()
+            }
+        case .info:
+            if item.id == "onboarding" {
+                onboardingManager.resume()
+            } else if item.id == "glucose" {
+                presentBolusEntryView(enableManualGlucoseEntry: true)
+            }
+        case .preMeal:
+            // Confirms ("Disable Pre-Meal Preset?") before clearing — same call
+            // the pre-meal toolbar button makes.
+            togglePreMealMode()
+        }
+    }
+
+    /// The currently-active custom/preset override, if one is editable.
+    private func activeEditableOverride() -> TemporaryScheduleOverride? {
+        guard let override = deviceManager.loopManager.settings.scheduleOverride, !override.hasFinished() else {
+            return nil
+        }
+        switch override.context {
+        case .preMeal, .legacyWorkout:
+            return nil
+        default:
+            return override
+        }
+    }
+
+    private func presentEditOverride(_ override: TemporaryScheduleOverride) {
+        let vc = AddEditOverrideTableViewController(glucoseUnit: statusCharts.glucose.glucoseUnit)
+        vc.inputMode = .editOverride(override)
+        vc.delegate = self
+        show(vc, sender: nil)
+    }
+
+    private func resumeInsulinDelivery() {
+        updateBannerAndHUDandStatusRows(statusRowMode: .pumpSuspended(resuming: true), newSize: nil, animated: true)
+        deviceManager.pumpManager?.resumeDelivery() { (error) in
+            DispatchQueue.main.async {
+                if let error = error {
+                    let alert = UIAlertController(with: error, title: NSLocalizedString("Failed to Resume Insulin Delivery", comment: "The alert title for a resume error"))
+                    self.present(alert, animated: true, completion: nil)
+                    if case .suspended = self.basalDeliveryState {
+                        self.updateBannerAndHUDandStatusRows(statusRowMode: .pumpSuspended(resuming: false), newSize: nil, animated: true)
+                    }
+                } else {
+                    self.updateBannerAndHUDandStatusRows(statusRowMode: self.determineStatusRowMode(), newSize: nil, animated: true)
+                    self.refreshContext.update(with: .insulin)
+                    self.log.debug("[reloadData] after manually resuming suspend")
+                    self.reloadData()
+                }
+            }
+        }
+    }
+
+    private func cancelActiveBolus() {
+        updateBannerAndHUDandStatusRows(statusRowMode: .cancelingBolus, newSize: nil, animated: true)
+        deviceManager.pumpManager?.cancelBolus() { (result) in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    // show user confirmation and actual delivery amount?
+                    break
+                case .failure(let error):
+                    self.presentErrorCancelingBolus(error)
+                    if case .inProgress(let dose) = self.bolusState {
+                        self.updateBannerAndHUDandStatusRows(statusRowMode: .bolusing(dose: dose), newSize: nil, animated: true)
+                    } else {
+                        self.updateBannerAndHUDandStatusRows(statusRowMode: .hidden, newSize: nil, animated: true)
+                    }
+                }
+            }
+        }
+    }
+
     private var shouldShowBannerWarning: Bool {
         alertPermissionsChecker.showWarning || alertMuter.configuration.shouldMute
     }
@@ -766,9 +1444,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     private func updateBannerAndHUDandStatusRows(statusRowMode: StatusRowMode, newSize: CGSize?, animated: Bool) {
         let hudWasVisible = self.shouldShowHUD
-        let statusWasVisible = self.shouldShowStatus
-
-        let oldStatusRowMode = self.statusRowMode
 
         self.statusRowMode = statusRowMode
 
@@ -777,50 +1452,27 @@ final class StatusTableViewController: LoopChartsTableViewController {
         }
 
         let hudIsVisible = self.shouldShowHUD
-        let statusIsVisible = self.shouldShowStatus
 
         hudView?.cgmStatusHUD?.isVisible = hudIsVisible
 
+        // The HUD is no longer a row — show/hide the floating bar instead and let
+        // the layout pass re-reserve its inset.
+        if hudWasVisible != hudIsVisible {
+            floatingHUDView.isHidden = !hudIsVisible
+            view.setNeedsLayout()
+        }
+
         tableView.beginUpdates()
-        
+
         updateBannerRow(animated: animated)
 
-        switch (hudWasVisible, hudIsVisible) {
-        case (false, true):
-            tableView.insertRows(at: [IndexPath(row: 0, section: Section.hud.rawValue)], with: animated ? .top : .none)
-        case (true, false):
-            tableView.deleteRows(at: [IndexPath(row: 0, section: Section.hud.rawValue)], with: animated ? .top : .none)
-        default:
-            break
-        }
-
-        let statusIndexPath = IndexPath(row: StatusRow.status.rawValue, section: Section.status.rawValue)
-
-        switch (statusWasVisible, statusIsVisible) {
-        case (true, true):
-            switch (oldStatusRowMode, self.statusRowMode) {
-            case (.enactingBolus, .enactingBolus):
-                break
-            case (.bolusing(let oldDose), .bolusing(let newDose)):
-                if oldDose.syncIdentifier != newDose.syncIdentifier {
-                    tableView.reloadRows(at: [statusIndexPath], with: animated ? .fade : .none)
-                }
-            case (.pumpSuspended(resuming: let wasResuming), .pumpSuspended(resuming: let isResuming)):
-                if isResuming != wasResuming {
-                    tableView.reloadRows(at: [statusIndexPath], with: animated ? .fade : .none)
-                }
-            default:
-                tableView.reloadRows(at: [statusIndexPath], with: animated ? .fade : .none)
-            }
-        case (false, true):
-            tableView.insertRows(at: [statusIndexPath], with: animated ? .bottom : .none)
-        case (true, false):
-            tableView.deleteRows(at: [statusIndexPath], with: animated ? .top : .none)
-        default:
-            break
-        }
-
         tableView.endUpdates()
+
+        // The island is no longer a row — it is part of the fixed top header, so
+        // it is refreshed directly. Done unconditionally (not only when the
+        // primary mode changes) so a co-active override's secondary bubble
+        // updates too. SwiftUI spring-morphs between the states itself.
+        updateIslandItems()
     }
 
     private func redrawCharts() {
@@ -883,12 +1535,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
         switch Section(rawValue: section)! {
         case .alertWarning:
             return shouldShowBannerWarning ? 1 : 0
-        case .hud:
-            return shouldShowHUD ? 1 : 0
         case .charts:
             return ChartRow.allCases.count
-        case .status:
-            return shouldShowStatus ? StatusRow.allCases.count : 0
         }
     }
 
@@ -917,7 +1565,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
             backgroundConfig?.backgroundColor = .critical
             backgroundConfiguration = backgroundConfig
             backgroundConfiguration?.backgroundInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 5, trailing: 10)
-            backgroundConfiguration?.cornerRadius = 10
+            backgroundConfiguration?.cornerRadius = 24
 
             let disclosureIndicator = UIImage(systemName: "chevron.right")?.withTintColor(.white)
             let imageView = UIImageView(image: disclosureIndicator)
@@ -961,7 +1609,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
             backgroundConfig?.customView = backgroundGradient
             backgroundConfiguration = backgroundConfig
             backgroundConfiguration?.backgroundInsets = NSDirectionalEdgeInsets(top: 0, leading: 5, bottom: 5, trailing: 5)
-            backgroundConfiguration?.cornerRadius = 10
+            backgroundConfiguration?.cornerRadius = 24
 
             let unmuteIndicator = UIImage(systemName: "stop.circle")?.withTintColor(.white)
             let imageView = UIImageView(image: unmuteIndicator)
@@ -985,11 +1633,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 cell.selectionStyle = .none
                 return cell
             }
-        case .hud:
-            let cell = tableView.dequeueReusableCell(withIdentifier: HUDViewTableViewCell.className, for: indexPath) as! HUDViewTableViewCell
-            hudView = cell.hudView
-
-            return cell
         case .charts:
             let cell = tableView.dequeueReusableCell(withIdentifier: ChartTableViewCell.className, for: indexPath) as! ChartTableViewCell
 
@@ -1025,121 +1668,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
             cell.setSubtitleTextColor(color: UIColor.secondaryLabel)
 
             return cell
-        case .status:
-
-            func getTitleSubtitleCell() -> TitleSubtitleTableViewCell {
-                let cell = tableView.dequeueReusableCell(withIdentifier: TitleSubtitleTableViewCell.className, for: indexPath) as! TitleSubtitleTableViewCell
-                cell.selectionStyle = .none
-                cell.backgroundColor = .secondarySystemBackground
-                cell.titleLabel.text = nil
-                cell.subtitleLabel.text = nil
-                cell.accessoryView = nil
-                return cell
-            }
-
-            switch StatusRow(rawValue: indexPath.row)! {
-            case .status:
-                switch statusRowMode {
-                case .hidden:
-                    let cell = getTitleSubtitleCell()
-                    return cell
-                case .scheduleOverrideEnabled(let override):
-                    let cell = getTitleSubtitleCell()
-                    switch override.context {
-                    case .preMeal:
-                        let symbolAttachment = NSTextAttachment()
-                        symbolAttachment.image = UIImage(named: "Pre-Meal-symbol")?.withTintColor(.carbTintColor)
-
-                        let attributedString = NSMutableAttributedString(attachment: symbolAttachment)
-                        attributedString.append(NSAttributedString(string: NSLocalizedString(" Pre-meal Preset", comment: "Status row title for premeal override enabled (leading space is to separate from symbol)")))
-                        cell.titleLabel.attributedText = attributedString
-                    case .legacyWorkout:
-                        let symbolAttachment = NSTextAttachment()
-                        symbolAttachment.image = UIImage(named: "workout-symbol")?.withTintColor(.glucoseTintColor)
-
-                        let attributedString = NSMutableAttributedString(attachment: symbolAttachment)
-                        attributedString.append(NSAttributedString(string: NSLocalizedString(" Workout Preset", comment: "Status row title for workout override enabled (leading space is to separate from symbol)")))
-                        cell.titleLabel.attributedText = attributedString
-                    case .preset(let preset):
-                        cell.titleLabel.text = String(format: NSLocalizedString("%@ %@", comment: "The format for an active custom preset. (1: preset symbol)(2: preset name)"), preset.symbol, preset.name)
-                    case .custom:
-                        cell.titleLabel.text = NSLocalizedString("Custom Preset", comment: "The title of the cell indicating a generic custom preset is enabled")
-                    }
-
-                    if override.isActive() {
-                        switch override.duration {
-                        case .finite:
-                            let endTimeText = DateFormatter.localizedString(from: override.activeInterval.end, dateStyle: .none, timeStyle: .short)
-                            cell.subtitleLabel.text = String(format: NSLocalizedString("until %@", comment: "The format for the description of a custom preset end date"), endTimeText)
-                        case .indefinite:
-                            cell.subtitleLabel.text = nil
-                        }
-                    } else {
-                        let startTimeText = DateFormatter.localizedString(from: override.startDate, dateStyle: .none, timeStyle: .short)
-                        cell.subtitleLabel.text = String(format: NSLocalizedString("starting at %@", comment: "The format for the description of a custom preset start date"), startTimeText)
-                    }
-
-                    return cell
-                case .enactingBolus:
-                    let cell = getTitleSubtitleCell()
-                    cell.titleLabel.text = NSLocalizedString("Starting Bolus", comment: "The title of the cell indicating a bolus is being sent")
-
-                    let indicatorView = UIActivityIndicatorView(style: .default)
-                    indicatorView.startAnimating()
-                    cell.accessoryView = indicatorView
-                    return cell
-                case .bolusing(let dose):
-                    let progressCell = tableView.dequeueReusableCell(withIdentifier: BolusProgressTableViewCell.className, for: indexPath) as! BolusProgressTableViewCell
-                    progressCell.selectionStyle = .none
-                    progressCell.totalUnits = dose.programmedUnits
-                    progressCell.tintColor = .insulinTintColor
-                    progressCell.deliveredUnits = bolusProgressReporter?.progress.deliveredUnits
-                    progressCell.backgroundColor = .secondarySystemBackground
-                    return progressCell
-                case .cancelingBolus:
-                    let cell = getTitleSubtitleCell()
-                    cell.titleLabel.text = NSLocalizedString("Canceling Bolus", comment: "The title of the cell indicating a bolus is being canceled")
-
-                    let indicatorView = UIActivityIndicatorView(style: .default)
-                    indicatorView.startAnimating()
-                    cell.accessoryView = indicatorView
-                    return cell
-                case .pumpSuspended(let resuming):
-                    let cell = getTitleSubtitleCell()
-                    cell.titleLabel.text = NSLocalizedString("Insulin Suspended", comment: "The title of the cell indicating the pump is suspended")
-
-                    if resuming {
-                        let indicatorView = UIActivityIndicatorView(style: .default)
-                        indicatorView.startAnimating()
-                        cell.accessoryView = indicatorView
-                    } else {
-                        cell.subtitleLabel.text = NSLocalizedString("Tap to Resume", comment: "The subtitle of the cell displaying an action to resume insulin delivery")
-                    }
-                    cell.selectionStyle = .default
-                    return cell
-                case .onboardingSuspended:
-                    let cell = tableView.dequeueReusableCell(withIdentifier: IconTitleSubtitleTableViewCell.className, for: indexPath) as! IconTitleSubtitleTableViewCell
-                    cell.selectionStyle = .default
-                    cell.backgroundColor = .secondarySystemBackground
-                    cell.iconImageView.image = UIImage(systemName: "exclamationmark.circle.fill")
-                    cell.iconImageView.tintColor = .warning
-                    cell.iconImageView.contentMode = .scaleAspectFit
-                    cell.iconImageView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 28)
-                    cell.titleLabel.text = NSLocalizedString("Setup Incomplete", comment: "The title of the cell indicating that onboarding is suspended")
-                    cell.subtitleLabel.text = NSLocalizedString("Tap to Resume", comment: "The subtitle of the cell displaying an action to resume onboarding")
-                    cell.accessoryView = nil
-                    return cell
-                case .recommendManualGlucoseEntry:
-                    let cell = getTitleSubtitleCell()
-                    cell.titleLabel.text = NSLocalizedString("No Recent Glucose", comment: "The title of the cell indicating that there is no recent glucose")
-                    cell.subtitleLabel.text = NSLocalizedString("Tap to Add", comment: "The subtitle of the cell displaying an action to add a manually measurement glucose value")
-                    cell.selectionStyle = .default
-                    let imageView = UIImageView(image: UIImage(named: "drop.circle"))
-                    imageView.tintColor = .glucoseTintColor
-                    cell.accessoryView = imageView
-                    return cell
-                }
-            }
         }
     }
 
@@ -1177,7 +1705,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     cell.setSubtitleLabel(label: nil)
                 }
             }
-        case .hud, .status, .alertWarning:
+        case .alertWarning:
             break
         }
     }
@@ -1187,10 +1715,15 @@ final class StatusTableViewController: LoopChartsTableViewController {
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
         switch Section(rawValue: indexPath.section)! {
         case .charts:
-            // Compute the height of the HUD, defaulting to 70
-            let hudHeight = ceil(hudView?.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).height ?? 74)
+            // Deliberately does NOT subtract the floating status bar's height.
+            // The charts are sized to the full viewport, so the content is
+            // taller than the visible area by exactly that bar's height and
+            // therefore actually travels UNDER the glass as you scroll. Sizing
+            // them to "viewport minus bar" instead made the content fit exactly,
+            // the table never scrolled, and the glass had nothing to refract —
+            // which is what made it read as a flat white blob.
             var availableSize = max(tableView.bounds.width, tableView.bounds.height)
-            availableSize -= (tableView.safeAreaInsets.top + tableView.safeAreaInsets.bottom + hudHeight)
+            availableSize -= (tableView.safeAreaInsets.top + tableView.safeAreaInsets.bottom)
 
             switch ChartRow(rawValue: indexPath.row)! {
             case .glucose:
@@ -1198,7 +1731,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
             case .iob, .dose, .cob:
                 return max(106, 0.21 * availableSize)
             }
-        case .hud, .status, .alertWarning:
+        case .alertWarning:
             return UITableView.automaticDimension
         }
     }
@@ -1212,68 +1745,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
             } else {
                 tableView.deselectRow(at: indexPath, animated: true)
                 presentUnmuteAlertConfirmation()
-            }
-        case .hud:
-            break
-        case .status:
-            switch StatusRow(rawValue: indexPath.row)! {
-            case .status:
-                tableView.deselectRow(at: indexPath, animated: true)
-
-                switch statusRowMode {
-                case .pumpSuspended(let resuming) where !resuming:
-                    updateBannerAndHUDandStatusRows(statusRowMode: .pumpSuspended(resuming: true) , newSize: nil, animated: true)
-                    deviceManager.pumpManager?.resumeDelivery() { (error) in
-                        DispatchQueue.main.async {
-                            if let error = error {
-                                let alert = UIAlertController(with: error, title: NSLocalizedString("Failed to Resume Insulin Delivery", comment: "The alert title for a resume error"))
-                                self.present(alert, animated: true, completion: nil)
-                                if case .suspended = self.basalDeliveryState {
-                                    self.updateBannerAndHUDandStatusRows(statusRowMode: .pumpSuspended(resuming: false), newSize: nil, animated: true)
-                                }
-                            } else {
-                                self.updateBannerAndHUDandStatusRows(statusRowMode: self.determineStatusRowMode(), newSize: nil, animated: true)
-                                self.refreshContext.update(with: .insulin)
-                                self.log.debug("[reloadData] after manually resuming suspend")
-                                self.reloadData()
-                            }
-                        }
-                    }
-                case .scheduleOverrideEnabled(let override):
-                    switch override.context {
-                    case .preMeal, .legacyWorkout:
-                        break
-                    default:
-                        let vc = AddEditOverrideTableViewController(glucoseUnit: statusCharts.glucose.glucoseUnit)
-                        vc.inputMode = .editOverride(override)
-                        vc.delegate = self
-                        show(vc, sender: tableView.cellForRow(at: indexPath))
-                    }
-                case .bolusing:
-                    updateBannerAndHUDandStatusRows(statusRowMode: .cancelingBolus, newSize: nil, animated: true)
-                    deviceManager.pumpManager?.cancelBolus() { (result) in
-                        DispatchQueue.main.async {
-                            switch result {
-                            case .success:
-                                // show user confirmation and actual delivery amount?
-                                break
-                            case .failure(let error):
-                                self.presentErrorCancelingBolus(error)
-                                if case .inProgress(let dose) = self.bolusState {
-                                    self.updateBannerAndHUDandStatusRows(statusRowMode: .bolusing(dose: dose), newSize: nil, animated: true)
-                                } else {
-                                    self.updateBannerAndHUDandStatusRows(statusRowMode: .hidden, newSize: nil, animated: true)
-                                }
-                            }
-                        }
-                    }
-                case .onboardingSuspended:
-                    onboardingManager.resume()
-                case .recommendManualGlucoseEntry:
-                    presentBolusEntryView(enableManualGlucoseEntry: true)
-                default:
-                    break
-                }
             }
         case .charts:
             switch ChartRow(rawValue: indexPath.row)! {
@@ -1353,6 +1824,15 @@ final class StatusTableViewController: LoopChartsTableViewController {
             vc.glucoseUnit = statusCharts.glucose.glucoseUnit
             vc.overrideHistory = deviceManager.loopManager.overrideHistory.getEvents()
             vc.delegate = self
+            // Pre-Meal lives IN the override screen, as a fixed button along its
+            // bottom. It goes in the TOOLBAR, not the navigation bar: that
+            // screen's own `viewDidLoad` runs after this and assigns
+            // `navigationItem.rightBarButtonItems = [saveButton, editButton]`,
+            // which silently wiped an item set here. `toolbarItems` is never
+            // touched by it, so the button survives — and the screen itself,
+            // being LoopKitUI's, still needs no edit.
+            vc.toolbarItems = [.flexibleSpace(), preMealBarButtonItem(), .flexibleSpace()]
+            (segue.destination as? UINavigationController)?.isToolbarHidden = false
         case let vc as PredictionTableViewController:
             vc.deviceManager = deviceManager
         default:
@@ -1368,6 +1848,10 @@ final class StatusTableViewController: LoopChartsTableViewController {
         presentCarbEntryScreen(nil)
     }
 
+    /// Marks a presented carb/meal-entry screen so RootNavigationController's
+    /// "view status" activity restoration doesn't dismiss it on app foreground.
+    static let mealEntryScreenIdentifier = "MealEntryScreen"
+
     func presentCarbEntryScreen(_ activity: NSUserActivity?) {
         let navigationWrapper: UINavigationController
         if FeatureFlags.simpleBolusCalculatorEnabled && !automaticDosingStatus.automaticDosingEnabled {
@@ -1379,8 +1863,10 @@ final class StatusTableViewController: LoopChartsTableViewController {
             let hostingController = DismissibleHostingController(rootView: bolusEntryView, isModalInPresentation: false)
             navigationWrapper = UINavigationController(rootViewController: hostingController)
             hostingController.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .cancel, target: navigationWrapper, action: #selector(dismissWithAnimation))
+            navigationWrapper.view.accessibilityIdentifier = Self.mealEntryScreenIdentifier
             present(navigationWrapper, animated: true)
-        } else {
+        } else if activity != nil {
+            // Preserve the existing screen for missed-meal / Siri restore flows.
             let viewModel = CarbEntryViewModel(delegate: deviceManager)
             if let activity {
                 viewModel.restoreUserActivityState(activity)
@@ -1388,9 +1874,132 @@ final class StatusTableViewController: LoopChartsTableViewController {
             let carbEntryView = CarbEntryView(viewModel: viewModel)
                 .environmentObject(deviceManager.displayGlucosePreference)
             let hostingController = DismissibleHostingController(rootView: carbEntryView, isModalInPresentation: false)
+            hostingController.view.accessibilityIdentifier = Self.mealEntryScreenIdentifier
+            present(hostingController, animated: true)
+        } else {
+            // Redesigned meal-entry screen (§7) for fresh manual entry.
+            let viewModel = MealEntryViewModel(delegate: deviceManager)
+            let mealEntryView = MealEntryView(viewModel: viewModel)
+                .environmentObject(deviceManager.displayGlucosePreference)
+            let hostingController = DismissibleHostingController(rootView: mealEntryView, isModalInPresentation: false)
+            hostingController.view.accessibilityIdentifier = Self.mealEntryScreenIdentifier
             present(hostingController, animated: true)
         }
         deviceManager.analyticsServicesManager.didDisplayCarbEntryScreen()
+    }
+
+    // MARK: - Meal entry picker (tap/hold the carb button → AI / Manual bubbles)
+
+    private static var mealButtonKey: UInt8 = 0
+    var mealButton: UIButton {
+        if let button = objc_getAssociatedObject(self, &Self.mealButtonKey) as? UIButton {
+            return button
+        }
+        let button = UIButton(type: .custom)
+        // Template rendering so tintColor still greens the icon (.custom, unlike
+        // .system, shows images in their original mode by default).
+        button.setImage(Self.scaledCarbsImage, for: .normal)
+        button.tintColor = .carbTintColor
+        // No highlight dim/tint on press (the .system button flashed white).
+        button.adjustsImageWhenHighlighted = false
+        // Center the icon so a scale transform grows it symmetrically (no drift).
+        button.contentHorizontalAlignment = .center
+        button.contentVerticalAlignment = .center
+        button.accessibilityLabel = NSLocalizedString("Add Meal", comment: "The label of the carb entry button")
+        button.addTarget(self, action: #selector(mealButtonTapped), for: .touchUpInside)
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(mealButtonPressed(_:)))
+        press.minimumPressDuration = 0.25
+        button.addGestureRecognizer(press)
+        objc_setAssociatedObject(self, &Self.mealButtonKey, button, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return button
+    }
+
+    private static var mealPickerKey: UInt8 = 0
+    private var mealPicker: MealEntryPickerOverlay? {
+        get { objc_getAssociatedObject(self, &Self.mealPickerKey) as? MealEntryPickerOverlay }
+        set { objc_setAssociatedObject(self, &Self.mealPickerKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    @objc private func mealButtonTapped() {
+        // AI off → behave exactly like today: straight to manual entry, no picker.
+        guard CarbEstimationSettings().isEnabled else {
+            presentCarbEntryScreen(nil)
+            return
+        }
+        if let picker = mealPicker {
+            picker.dismiss()
+            mealPicker = nil
+        } else {
+            showMealPicker()
+        }
+    }
+
+    @objc private func mealButtonPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard CarbEstimationSettings().isEnabled else { return }
+        switch gesture.state {
+        case .began:
+            setMealButtonExpanded(true)   // subtle grow while holding
+            if mealPicker == nil { showMealPicker() }
+        case .changed:
+            if let picker = mealPicker, let host = picker.superview {
+                picker.updateHover(at: gesture.location(in: host))
+            }
+        case .ended:
+            setMealButtonExpanded(false)
+            if let picker = mealPicker {
+                picker.commitHoverOrDismiss()
+                if picker.superview == nil { mealPicker = nil }
+            }
+        case .cancelled, .failed:
+            setMealButtonExpanded(false)
+            mealPicker?.dismiss()
+            mealPicker = nil
+        default:
+            break
+        }
+    }
+
+    /// Subtle, fluid spring scale on the carb button while it's being held.
+    /// Animates the BUTTON's own transform (its layoutSubviews doesn't touch it,
+    /// so the highlight pass on touch-down can't cancel the grow); the centered
+    /// content keeps it from drifting sideways.
+    private func setMealButtonExpanded(_ expanded: Bool) {
+        UIView.animate(withDuration: expanded ? 0.7 : 0.5, delay: 0,
+                       usingSpringWithDamping: 0.72, initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.mealButton.transform = expanded
+                ? CGAffineTransform(scaleX: 1.4, y: 1.4)
+                : .identity
+        }
+    }
+
+    private func showMealPicker() {
+        // Host on the navigation controller's view (not the scrolling table view)
+        // so the bubbles stay pinned above the bottom bar while scrolling.
+        let host: UIView = navigationController?.view ?? view
+        let anchor = mealButton.convert(mealButton.bounds, to: host)
+        let picker = MealEntryPickerOverlay(anchor: anchor) { [weak self] choice in
+            guard let self else { return }
+            self.mealPicker = nil
+            switch choice {
+            case .ai:     self.userTappedAICarbEstimation()
+            case .manual: self.presentCarbEntryScreen(nil)
+            case .none:   break
+            }
+        }
+        host.addSubview(picker)
+        picker.frame = host.bounds
+        picker.show()
+        mealPicker = picker
+    }
+
+    @objc func userTappedAICarbEstimation() {
+        let viewModel = MealEntryViewModel(delegate: deviceManager)
+        let flow = AICarbEntryFlowView(viewModel: viewModel, coordinator: CarbEstimationCoordinator())
+            .environmentObject(deviceManager.displayGlucosePreference)
+        let hostingController = DismissibleHostingController(rootView: flow, isModalInPresentation: false)
+        hostingController.view.accessibilityIdentifier = Self.mealEntryScreenIdentifier
+        present(hostingController, animated: true)
     }
 
     @IBAction func presentBolusScreen() {
@@ -1442,39 +2051,103 @@ final class StatusTableViewController: LoopChartsTableViewController {
         deviceManager.analyticsServicesManager.didDisplayBolusScreen()
     }
 
-    private func createPreMealButtonItem(selected: Bool, isEnabled: Bool) -> UIBarButtonItem {
-        let item = UIBarButtonItem(image: UIImage.preMealImage(selected: selected), style: .plain, target: self, action: #selector(premealButtonTapped(_:)))
-        item.accessibilityLabel = NSLocalizedString("Pre-Meal Targets", comment: "The label of the pre-meal mode toggle button")
-
-        if selected {
-            item.accessibilityTraits.insert(.selected)
-            item.accessibilityHint = NSLocalizedString("Disables", comment: "The action hint of the workout mode toggle button when enabled")
-        } else {
-            item.accessibilityHint = NSLocalizedString("Enables", comment: "The action hint of the workout mode toggle button when disabled")
-        }
-
+    /// Statistics — a plain native bar item so it keeps its place in the toolbar's
+    /// shared Liquid Glass (see DESIGN_SYSTEM.md: never a custom view here).
+    private func createStatisticsButtonItem() -> UIBarButtonItem {
+        let item = UIBarButtonItem(image: Self.statisticsImage,
+                                   style: .plain,
+                                   target: self,
+                                   action: #selector(presentStatistics))
+        item.accessibilityLabel = NSLocalizedString("Statistics", comment: "The label of the statistics button")
+        // Same green as the carb/meal button beside it, per the user's choice.
         item.tintColor = UIColor.carbTintColor
-        item.isEnabled = isEnabled
-
         return item
     }
-    
-    private func createWorkoutButtonItem(selected: Bool, isEnabled: Bool) -> UIBarButtonItem {
-        let item = UIBarButtonItem(image: UIImage.workoutImage(selected: selected), style: .plain, target: self, action: #selector(toggleWorkoutMode(_:)))
-        item.accessibilityLabel = NSLocalizedString("Workout Targets", comment: "The label of the workout mode toggle button")
 
-        if selected {
-            item.accessibilityTraits.insert(.selected)
-            item.accessibilityHint = NSLocalizedString("Disables", comment: "The action hint of the workout mode toggle button when enabled")
-        } else {
-            item.accessibilityHint = NSLocalizedString("Enables", comment: "The action hint of the workout mode toggle button when disabled")
-        }
+    /// Sized to sit with the custom-asset icons beside it — an SF Symbol at its
+    /// default bar size reads noticeably smaller than they do.
+    ///
+    /// A plain trend line: every other icon here is outline line-art, so the
+    /// filled bars of `chart.bar.xaxis` and then the point markers on
+    /// `chart.xyaxis.line` both read as noise beside them. This symbol is a
+    /// continuous stroke with no dots.
+    ///
+    /// Weight `.regular` rather than `.light` — one step up, which thickens the
+    /// stroke just enough to sit level with the custom PDF icons instead of
+    /// looking faint next to them.
+    private static let statisticsImage = UIImage(
+        systemName: "chart.line.uptrend.xyaxis",
+        withConfiguration: UIImage.SymbolConfiguration(pointSize: 20 * toolbarIconScale, weight: .regular))
 
+    @objc private func presentStatistics() {
+        // Current therapy settings are READ here purely so the review screen can
+        // show "your setting" beside "your data says". Nothing writes them back.
+        let therapy = deviceManager.loopManager.therapySettings
+        let now = Date()
+        let currentISF = therapy.insulinSensitivitySchedule?
+            .quantity(at: now).doubleValue(for: .milligramsPerDeciliter)
+        let currentCarbRatio = therapy.carbRatioSchedule?.value(at: now)
+        let scheduledBasal = therapy.basalRateSchedule?.total()
+
+        let hostingController = DismissibleHostingController(
+            rootView: HistoryStatisticsView(currentISF: currentISF,
+                                            currentCarbRatio: currentCarbRatio,
+                                            scheduledBasalPerDay: scheduledBasal,
+                                            showsDoneButton: true),
+            isModalInPresentation: false)
+        let navigationWrapper = UINavigationController(rootViewController: hostingController)
+        // Done lives in the SwiftUI toolbar so it matches every other Done in
+        // the app; adding a UIKit one here would give two of them.
+        present(navigationWrapper, animated: true)
+    }
+
+    /// The presets button — opens the override screen directly. Pre-Meal is a
+    /// button inside that screen, so the two live together without this being a
+    /// menu the user has to open first.
+    private func createPresetsButtonItem(selected: Bool, isEnabled: Bool) -> UIBarButtonItem {
+        let item = UIBarButtonItem(image: Self.scaledWorkoutImages[selected],
+                                   style: .plain,
+                                   target: self,
+                                   action: #selector(toggleWorkoutMode(_:)))
+        item.accessibilityLabel = NSLocalizedString("Presets", comment: "The label of the presets button")
+        if selected { item.accessibilityTraits.insert(.selected) }
         item.tintColor = UIColor.glucoseTintColor
         item.isEnabled = isEnabled
-
         return item
     }
+
+    /// The Pre-Meal control shown in the override screen's navigation bar.
+    /// Reflects current state in its title so it says what tapping will do.
+    private func preMealBarButtonItem() -> UIBarButtonItem {
+        let on = preMealMode == true
+        let item = UIBarButtonItem(
+            title: on
+                ? NSLocalizedString("End Pre-Meal", comment: "Button ending pre-meal from the override screen")
+                : NSLocalizedString("Pre-Meal", comment: "Button starting pre-meal from the override screen"),
+            style: on ? .done : .plain,
+            target: self,
+            action: #selector(preMealButtonFromOverrideScreen))
+        item.tintColor = UIColor.carbTintColor
+        item.isEnabled = preMealModeAllowed
+        return item
+    }
+
+    @objc private func preMealButtonFromOverrideScreen(_ sender: UIBarButtonItem) {
+        // 🐛 ORDER IS THE WHOLE BUG. This used to toggle FIRST and dismiss second,
+        // which silently did nothing when starting pre-meal: `togglePreMealMode`
+        // needs to PRESENT the duration picker, and `self` was already presenting
+        // the override screen — UIKit refuses a second presentation, logs a
+        // warning nobody sees, and then the dismiss below closed the override
+        // screen. Net effect: tap Pre-Meal, screen closes, nothing happens.
+        // (Ending pre-meal appeared to work, because that path only mutates
+        // settings and presents nothing — which is why this looked intermittent.)
+        //
+        // Dismiss FIRST, act in the completion, when self is free to present.
+        dismiss(animated: true) { [weak self] in
+            self?.togglePreMealMode(confirm: false)
+        }
+    }
+
 
     @IBAction func premealButtonTapped(_ sender: UIBarButtonItem) {
         togglePreMealMode(confirm: false)
@@ -1544,7 +2217,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
             }
         } else {
             if FeatureFlags.sensitivityOverridesEnabled {
-                performSegue(withIdentifier: OverrideSelectionViewController.className, sender: toolbarItems![6])
+                performSegue(withIdentifier: OverrideSelectionViewController.className, sender: toolbarItems![ToolbarIndex.presets])
             } else {
                 presentWorkoutModeAlertController()
             }
@@ -1726,6 +2399,26 @@ final class StatusTableViewController: LoopChartsTableViewController {
             hudView.pumpStatusHUD.presentStatusHighlight(deviceManager.pumpStatusHighlight)
             hudView.pumpStatusHUD.lifecycleProgress = deviceManager.pumpLifecycleProgress
         }
+    }
+
+    /// Pushes the current device statuses straight into the HUD.
+    ///
+    /// `lifecycleProgress` (the pod/reservoir expiry indicator) is otherwise only
+    /// assigned inside `reloadData`'s async completion block, and changing a
+    /// device's expiry urgency in its own settings screen does not emit a
+    /// `PumpManagerStatus` update — so the indicator kept its old colour until
+    /// the next loop cycle, minutes later. Called on the way back onto this
+    /// screen, which is where such a change is made from.
+    private func refreshDeviceStatusHUD() {
+        guard let hudView = hudView else { return }
+
+        hudView.cgmStatusHUD.presentStatusHighlight(deviceManager.cgmStatusHighlight)
+        hudView.cgmStatusHUD.presentStatusBadge(deviceManager.cgmStatusBadge)
+        hudView.cgmStatusHUD.lifecycleProgress = deviceManager.cgmLifecycleProgress
+
+        hudView.pumpStatusHUD.presentStatusHighlight(deviceManager.pumpStatusHighlight)
+        hudView.pumpStatusHUD.presentStatusBadge(deviceManager.pumpStatusBadge)
+        hudView.pumpStatusHUD.lifecycleProgress = deviceManager.pumpLifecycleProgress
     }
 
     private func configureCGMManagerHUDViews() {

@@ -63,7 +63,7 @@ struct LiveActivityBottomRowManagerView: View {
                     Text(NSLocalizedString("Save", comment: ""))
                 }
                 .disabled(!isDirty)
-                .buttonStyle(ActionButtonStyle())
+                .buttonStyle(PillActionButtonStyle())
                 .listRowInsets(EdgeInsets())
             }
         }
@@ -82,7 +82,8 @@ struct LiveActivityBottomRowManagerView: View {
         }
         .actionSheet(isPresented: $showAdd, content: { addItem })
         .insetGroupedListStyle()
-        .navigationBarTitle(Text(NSLocalizedString("Configure Display", comment: "Title for the view to configure the lock screen display")))
+        .navigationBarTitle(Text(NSLocalizedString("Status Row Items", comment: "Title for the view to configure the lock screen status row")))
+        .loopSoftTopEdge()
     }
     
     @ViewBuilder

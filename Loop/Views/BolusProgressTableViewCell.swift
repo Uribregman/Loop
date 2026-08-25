@@ -25,6 +25,10 @@ public class BolusProgressTableViewCell: UITableViewCell {
     @IBOutlet weak var stopSquare: UIView! {
         didSet {
             stopSquare.layer.cornerRadius = 2
+            // Hidden by request: the ring reads cleaner empty. The row is still
+            // tappable to stop the bolus and still says so — only the glyph in
+            // the middle of the circle is gone, not the behaviour.
+            stopSquare.isHidden = true
         }
     }
 

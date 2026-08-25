@@ -19,6 +19,7 @@ struct HowAbsorptionTimeWorksView: View {
                 }
             }
             .navigationTitle("Absorption Time")
+            .loopSoftTopEdge()
             .toolbar {
                 dismissButton
             }

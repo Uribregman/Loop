@@ -52,12 +52,33 @@ public final class CGMStatusHUDView: DeviceStatusHUDView, NibLoadable {
         })
     }
     
+    public override func awakeFromNib() {
+        super.awakeFromNib()
+        // Halve the gap the nib puts between the reading and its trend arrow.
+        // With the arrow's enclosing circle gone, the old spacing left it looking
+        // detached from the number it belongs to.
+        //
+        // Done HERE, not in `setup()`: setup runs from `init(coder:)`, before the
+        // nib has connected its outlets, so `statusStackView` is still nil there
+        // and touching it crashed the app on launch.
+        // Tight to the number: the arrow belongs to the reading, so it should
+        // sit beside it rather than floating in the pill. Tightened a further
+        // third (6 -> 4) by request.
+        statusStackView?.spacing = 4
+    }
+
     override public func tintColorDidChange() {
         super.tintColorDidChange()
         
         glucoseValueHUD.tintColor = viewModel.glucoseValueTintColor
-        glucoseTrendHUD.tintColor = viewModel.glucoseTrendTintColor
+        // Fixed yellow by request. NOTE this drops a signal: the trend arrow used
+        // to take `viewModel.glucoseTrendTintColor`, which turned it red/amber
+        // with the glucose state. The reading itself still carries that colour.
+        glucoseTrendHUD.tintColor = Self.trendArrowColor
     }
+
+    /// The trend arrow's fixed colour.
+    static let trendArrowColor = UIColor.systemYellow
 
     override public func presentStatusHighlight(_ statusHighlight: DeviceStatusHighlight?) {
         viewModel.statusHighlight = statusHighlight
@@ -137,6 +158,9 @@ public final class CGMStatusHUDView: DeviceStatusHUDView, NibLoadable {
     
     func updateTrendIcon() {
         glucoseTrendHUD.setIcon(viewModel.glucoseTrendIcon)
-        glucoseTrendHUD.tintColor = viewModel.glucoseTrendTintColor
+        // Fixed yellow, NOT `viewModel.glucoseTrendTintColor`. This line runs on
+        // every glucose update and was quietly undoing the colour set in
+        // `tintColorDidChange`, so the arrow never actually stayed yellow.
+        glucoseTrendHUD.tintColor = Self.trendArrowColor
     }
 }

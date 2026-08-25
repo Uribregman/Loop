@@ -29,6 +29,14 @@ class LiveActivityManager : LiveActivityManagerProxy {
     
     private var startDate: Date = Date.now
     private var settings: LiveActivitySettings = UserDefaults.standard.liveActivity ?? LiveActivitySettings()
+
+    /// Retry bookkeeping: update() has several data-not-ready-yet early exits
+    /// (no cached glucose unit at cold launch, no samples, no chart window).
+    /// Freshly (re)created activities show the "Open the app to update" overlay
+    /// until the first successful update, so a failed update must retry soon
+    /// rather than leave the overlay stuck until the next loop cycle.
+    private var updateRetryCount = 0
+    private static let maxUpdateRetries = 5
     
     private let cobFormatter: NumberFormatter =  {
         let numberFormatter = NumberFormatter()
@@ -94,6 +102,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
             
             guard let unit = await self.healthStore.cachedPreferredUnits(for: .bloodGlucose) else {
                 print("ERROR: No unit found...")
+                self.scheduleUpdateRetry()
                 return
             }
             
@@ -103,9 +112,10 @@ class LiveActivityManager : LiveActivityManagerProxy {
             let statusContext = UserDefaults.appGroup?.statusExtensionContext
             let glucoseFormatter = NumberFormatter.glucoseFormatter(for: unit)
             
-            let glucoseSamples = self.getGlucoseSample(unit: unit)
+            let glucoseSamples = await self.getGlucoseSample(unit: unit)
             guard let currentGlucose = glucoseSamples.last else {
                 print("ERROR: No glucose sample found...")
+                self.scheduleUpdateRetry()
                 return
             }
 
@@ -118,7 +128,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
                 delta = "\(deltaValue < 0 ? "-" : "+")\(glucoseFormatter.string(from: abs(deltaValue)) ?? "??")"
             }
             
-            let bottomRow = self.getBottomRow(
+            let bottomRow = await self.getBottomRow(
                 currentGlucose: current,
                 delta: delta,
                 statusContext: statusContext,
@@ -138,6 +148,7 @@ class LiveActivityManager : LiveActivityManagerProxy {
             }
             
             guard let endDateChart = endDateChart else {
+                self.scheduleUpdateRetry()
                 return
             }
             
@@ -205,6 +216,18 @@ class LiveActivityManager : LiveActivityManagerProxy {
                 state: state,
                 staleDate: Date.now.addingTimeInterval(.hours(1))
             ))
+            self.updateRetryCount = 0
+        }
+    }
+
+    /// Re-attempt update() shortly after a data-not-ready early exit, so a fresh
+    /// activity doesn't sit on the "Open the app to update" overlay until the
+    /// next loop cycle.
+    private func scheduleUpdateRetry() {
+        guard updateRetryCount < Self.maxUpdateRetries else { return }
+        updateRetryCount += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            self?.update()
         }
     }
     
@@ -308,53 +331,37 @@ class LiveActivityManager : LiveActivityManagerProxy {
         }
     }
     
-    private func getInsulinOnBoard() -> String {
-        let updateGroup = DispatchGroup()
-        var iob = "??"
-        
-        updateGroup.enter()
-        self.doseStore.insulinOnBoard(at: Date.now) { result in
-            switch (result) {
-            case .failure:
-                break
-            case .success(let iobValue):
-                iob = self.iobFormatter.string(from: iobValue.value) ?? "??"
-                break
+    private func getInsulinOnBoard() async -> String {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+            self.doseStore.insulinOnBoard(at: Date.now) { result in
+                switch result {
+                case .failure:
+                    continuation.resume(returning: "??")
+                case .success(let iobValue):
+                    let value = self.iobFormatter.string(from: iobValue.value) ?? "??"
+                    continuation.resume(returning: value)
+                }
             }
-            
-            updateGroup.leave()
         }
-        
-        _ = updateGroup.wait(timeout: .distantFuture)
-        return iob
     }
     
-    private func getGlucoseSample(unit: HKUnit) -> [StoredGlucoseSample] {
-        let updateGroup = DispatchGroup()
-        var samples: [StoredGlucoseSample] = []
-        
-        updateGroup.enter()
-        
-        // When in spacious mode, we want to show the predictive line
-        // In compact mode, we only want to show the history
-        let timeInterval: TimeInterval = self.settings.addPredictiveLine ? .hours(-2) : .hours(-6)
-        self.glucoseStore.getGlucoseSamples(
-            start: adjustedChartStart(Date.now.addingTimeInterval(timeInterval)),
-            end: Date.now
-        ) { result in
-            switch (result) {
-            case .failure:
-                break
-            case .success(let data):
-                samples = data
-                break
+    private func getGlucoseSample(unit: HKUnit) async -> [StoredGlucoseSample] {
+        await withCheckedContinuation { (continuation: CheckedContinuation<[StoredGlucoseSample], Never>) in
+            // When in spacious mode, we want to show the predictive line
+            // In compact mode, we only want to show the history
+            let timeInterval: TimeInterval = self.settings.addPredictiveLine ? .hours(-2) : .hours(-6)
+            self.glucoseStore.getGlucoseSamples(
+                start: adjustedChartStart(Date.now.addingTimeInterval(timeInterval)),
+                end: Date.now
+            ) { result in
+                switch result {
+                case .failure:
+                    continuation.resume(returning: [])
+                case .success(let data):
+                    continuation.resume(returning: data)
+                }
             }
-            
-            updateGroup.leave()
         }
-        
-        _ = updateGroup.wait(timeout: .distantFuture)
-        return samples
     }
     
     // If the chart start falls past the half-hour mark (HH:31–HH:59), pull it back to HH:30
@@ -490,43 +497,48 @@ class LiveActivityManager : LiveActivityManagerProxy {
         return glucoseRanges
     }
     
-    private func getBottomRow(currentGlucose: Double, delta: String, statusContext: StatusExtensionContext?, glucoseFormatter: NumberFormatter) -> [BottomRowItem] {
-        return self.settings.bottomRowConfiguration.map { type in
+    private func getBottomRow(currentGlucose: Double, delta: String, statusContext: StatusExtensionContext?, glucoseFormatter: NumberFormatter) async -> [BottomRowItem] {
+        var result: [BottomRowItem] = []
+        for type in self.settings.bottomRowConfiguration {
             switch(type) {
             case .iob:
-                return BottomRowItem.generic(label: type.name(), value: getInsulinOnBoard(), unit: "U")
+                let iob = await getInsulinOnBoard()
+                result.append(BottomRowItem.generic(label: type.name(), value: iob, unit: "U"))
                 
             case .cob:
                 var cob: String = "0"
                 if let cobValue = statusContext?.carbsOnBoard {
                     cob = self.cobFormatter.string(from: cobValue) ?? "??"
                 }
-                return BottomRowItem.generic(label: type.name(), value: cob, unit: "g")
+                result.append(BottomRowItem.generic(label: type.name(), value: cob, unit: "g"))
                 
             case .basal:
                 guard let netBasalContext = statusContext?.netBasal else {
-                    return BottomRowItem.basal(rate: 0, percentage: 0)
+                    result.append(BottomRowItem.basal(rate: 0, percentage: 0))
+                    continue
                 }
 
-                return BottomRowItem.basal(rate: netBasalContext.rate, percentage: netBasalContext.percentage)
+                result.append(BottomRowItem.basal(rate: netBasalContext.rate, percentage: netBasalContext.percentage))
                 
             case .currentBg:
-                return BottomRowItem.currentBg(label: type.name(), value: "\(glucoseFormatter.string(from: currentGlucose) ?? "??")", trend: statusContext?.glucoseDisplay?.trendType)
+                result.append(BottomRowItem.currentBg(label: type.name(), value: "\(glucoseFormatter.string(from: currentGlucose) ?? "??")", trend: statusContext?.glucoseDisplay?.trendType))
                 
             case .eventualBg:
                 guard let eventual = statusContext?.predictedGlucose?.values.last else {
-                    return BottomRowItem.generic(label: type.name(), value: "??", unit: "")
+                    result.append(BottomRowItem.generic(label: type.name(), value: "??", unit: ""))
+                    continue
                 }
                 
-                return BottomRowItem.generic(label: type.name(), value: glucoseFormatter.string(from: eventual) ?? "??", unit: "")
+                result.append(BottomRowItem.generic(label: type.name(), value: glucoseFormatter.string(from: eventual) ?? "??", unit: ""))
                 
             case .deltaBg:
-                return BottomRowItem.generic(label: type.name(), value: delta, unit: "")
+                result.append(BottomRowItem.generic(label: type.name(), value: delta, unit: ""))
                 
             case .updatedAt:
-                return BottomRowItem.generic(label: type.name(), value: timeFormatter.string(from: Date.now), unit: "")
+                result.append(BottomRowItem.generic(label: type.name(), value: timeFormatter.string(from: Date.now), unit: ""))
             }
-       }
+        }
+        return result
     }
     
     private func initEmptyActivity(settings: LiveActivitySettings) {

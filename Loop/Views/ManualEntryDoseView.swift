@@ -15,7 +15,6 @@ import LoopUI
 
 
 struct ManualEntryDoseView: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @ObservedObject var viewModel: ManualEntryDoseViewModel
 
@@ -26,9 +25,6 @@ struct ManualEntryDoseView: View {
 
     @Environment(\.dismissAction) var dismiss
 
-    private var accessoryClearance: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 72 : 52
-    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -40,11 +36,11 @@ struct ManualEntryDoseView: View {
                 .insetGroupedListStyle()
             }
             .navigationBarTitle(self.title)
+            .loopSoftTopEdge()
             .supportedInterfaceOrientations(.portrait)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if bolusFieldFocused {
-                    // Reserve space so the toolbar doesn’t overlap the field
-                    Color.clear.frame(height: accessoryClearance)
+                    keyboardAccessory
                 } else {
                     actionArea
                 }
@@ -61,6 +57,8 @@ struct ManualEntryDoseView: View {
             VStack(spacing: 8) {
                 HStack(spacing: 0) {
                     activeCarbsLabel
+                    Spacer(minLength: 8)
+                    currentGlucoseLabel
                     Spacer(minLength: 8)
                     activeInsulinLabel
                 }
@@ -102,6 +100,16 @@ struct ManualEntryDoseView: View {
             quantity: viewModel.activeInsulin,
             unit: .internationalUnit(),
             maxFractionDigits: 2
+        )
+    }
+    
+    @ViewBuilder
+    private var currentGlucoseLabel: some View {
+        LabeledQuantity(
+            label: Text("Current Glucose", comment: "Title describing current glucose value"),
+            quantity: viewModel.glucoseValues.last?.quantity, // latest glucose
+            unit: viewModel.glucoseUnit,                      // mg/dL or mmol/L based on view model
+            maxFractionDigits: viewModel.glucoseUnit == .milligramsPerDeciliter ? 0 : 1
         )
     }
 
@@ -190,12 +198,6 @@ struct ManualEntryDoseView: View {
                         enteredBolusString = String(newValue.prefix(5))
                     }
                 }
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") { bolusFieldFocused = false }
-                    }
-                }
                 bolusUnitsLabel
             }
         }
@@ -225,6 +227,36 @@ struct ManualEntryDoseView: View {
         enteredBolusAmount <= 0
     }
 
+    /// The row shown in place of the action area while the keypad is up.
+    ///
+    /// Deliberately NOT a `ToolbarItemGroup(placement: .keyboard)`, which is
+    /// what this used to be: that placement welds the button to the keyboard's
+    /// top edge, so "Done" sat flush on the keys with nothing between them. As a
+    /// bottom safe-area inset it is lifted by the same keyboard avoidance that
+    /// moves everything else, and it can keep a deliberate gap above the keys.
+    private var keyboardAccessory: some View {
+        HStack {
+            Spacer()
+            Button(action: { bolusFieldFocused = false }) {
+                Text("Done", comment: "Button label to dismiss the keypad")
+                    .font(.body.weight(.semibold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(GlassButtonStyle(in: Capsule()))
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, Self.keyboardClearance)
+        // ⚠️ NO BACKGROUND. A filled row here paints a grey band across the full
+        // width above the keyboard — invisible against the screen background in
+        // some places, an obvious block over a tile in others. The Done pill
+        // carries its own glass; the row itself is only a position.
+    }
+
+    /// Gap between the Done row and the top of the keyboard.
+    private static let keyboardClearance: CGFloat = 12
+
     private var actionArea: some View {
         VStack(spacing: 0) {
             actionButton.disabled(actionButtonDisabled)
@@ -242,7 +274,7 @@ struct ManualEntryDoseView: View {
                 return Text("Log Dose", comment: "Button text to log a dose")
             }
         )
-        .buttonStyle(ActionButtonStyle(.primary))
+        .buttonStyle(PillActionButtonStyle(.primary))
         .padding()
     }
 }

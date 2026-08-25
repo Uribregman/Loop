@@ -499,6 +499,19 @@ final class LoopDataManager {
         analyticsServicesManager.loopDidSucceed(duration)
         dosingDecisionStore.storeDosingDecision(dosingDecision) {}
 
+        // Follower feed (Stage F2) — WRITE-ONLY OBSERVATION.
+        //
+        // The cycle is finished by this point: `dosingDecision` is the record of
+        // what was already decided, and this reads nothing live. `record(status:)`
+        // hops off this queue immediately, cannot throw back into it, and returns
+        // at once unless BOTH the history log and the follower feed are switched
+        // on — the feed defaults OFF.
+        //
+        // ⚠️ This is the only line of the follower project that touches the loop
+        // cycle. It must never grow: no waiting on it, no reading its result, no
+        // second call. If publishing is slow or failing, the loop must not know.
+        HistoryLogger.shared.record(status: dosingDecision, loopCompletedAt: date)
+
         NotificationCenter.default.post(name: .LoopCompleted, object: self)
     }
 
@@ -685,6 +698,13 @@ extension LoopDataManager {
             self.dataAccessQueue.async {
                 switch result {
                 case .success(let storedCarbEntry):
+                    // Durable history. Write-only observation (see HistoryLogger);
+                    // it reads nothing back and cannot affect dosing. Hooked HERE
+                    // because this is the one chokepoint every carb path funnels
+                    // through — meal screen, bolus screen, simple bolus, Watch and
+                    // remote entry. Hooking the UI would have missed some of them.
+                    HistoryLogger.shared.record(carbEntry: storedCarbEntry)
+
                     // Remove the active pre-meal target override
                     self.mutateSettings { settings in
                         settings.clearOverride(matching: .preMeal)
@@ -1235,7 +1255,8 @@ extension LoopDataManager {
         potentialCarbEntry: NewCarbEntry? = nil,
         replacingCarbEntry replacedCarbEntry: StoredCarbEntry? = nil,
         includingPendingInsulin: Bool = false,
-        includingPositiveVelocityAndRC: Bool = true
+        includingPositiveVelocityAndRC: Bool = true,
+        allowStalePumpData: Bool = false
     ) throws -> [PredictedGlucoseValue] {
         dispatchPrecondition(condition: .onQueue(dataAccessQueue))
 
@@ -1254,7 +1275,7 @@ extension LoopDataManager {
             throw LoopError.invalidFutureGlucose(date: lastGlucoseDate)
         }
 
-        guard now().timeIntervalSince(pumpStatusDate) <= LoopCoreConstants.inputDataRecencyInterval else {
+        guard allowStalePumpData || now().timeIntervalSince(pumpStatusDate) <= LoopCoreConstants.inputDataRecencyInterval else {
             throw LoopError.pumpDataTooOld(date: pumpStatusDate)
         }
 
@@ -1373,7 +1394,8 @@ extension LoopDataManager {
         potentialCarbEntry: NewCarbEntry?,
         replacingCarbEntry replacedCarbEntry: StoredCarbEntry?,
         includingPendingInsulin: Bool,
-        considerPositiveVelocityAndRC: Bool
+        considerPositiveVelocityAndRC: Bool,
+        allowStalePumpData: Bool = false
     ) throws -> [PredictedGlucoseValue] {
         let retrospectiveStart = glucose.date.addingTimeInterval(-type(of: retrospectiveCorrection).retrospectionInterval)
         let earliestEffectDate = Date(timeInterval: .hours(-24), since: now())
@@ -1458,7 +1480,8 @@ extension LoopDataManager {
             potentialCarbEntry: potentialCarbEntry,
             replacingCarbEntry: replacedCarbEntry,
             includingPendingInsulin: true,
-            includingPositiveVelocityAndRC: considerPositiveVelocityAndRC
+            includingPositiveVelocityAndRC: considerPositiveVelocityAndRC,
+            allowStalePumpData: allowStalePumpData
         )
     }
 
@@ -1568,7 +1591,8 @@ extension LoopDataManager {
             model: model,
             pendingInsulin: 0, // Pending insulin is already reflected in the prediction
             maxBolus: maxBolus,
-            volumeRounder: volumeRounder
+            volumeRounder: volumeRounder,
+            preferences: Preferences.shared
         )
     }
 
@@ -1851,7 +1875,8 @@ extension LoopDataManager {
                     lastTempBasal: lastTempBasal,
                     volumeRounder: volumeRounder,
                     rateRounder: rateRounder,
-                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
+                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true,
+                    preferences: Preferences.shared
                 )
             case .tempBasalOnly:
 
@@ -1866,7 +1891,8 @@ extension LoopDataManager {
                     additionalActiveInsulinClamp: iobHeadroom,
                     lastTempBasal: lastTempBasal,
                     rateRounder: rateRounder,
-                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
+                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true,
+                    preferences: Preferences.shared
                 )
                 dosingRecommendation = AutomaticDoseRecommendation(basalAdjustment: temp)
             }
@@ -1987,7 +2013,7 @@ protocol LoopState {
     /// - Parameter considerPositiveVelocityAndRC: Positive velocity and positive retrospective correction will not be used if this is false.
     /// - Returns: An timeline of predicted glucose values
     /// - Throws: LoopError.missingDataError if prediction cannot be computed
-    func predictGlucose(using inputs: PredictionInputEffect, potentialBolus: DoseEntry?, potentialCarbEntry: NewCarbEntry?, replacingCarbEntry replacedCarbEntry: StoredCarbEntry?, includingPendingInsulin: Bool, considerPositiveVelocityAndRC: Bool) throws -> [PredictedGlucoseValue]
+    func predictGlucose(using inputs: PredictionInputEffect, potentialBolus: DoseEntry?, potentialCarbEntry: NewCarbEntry?, replacingCarbEntry replacedCarbEntry: StoredCarbEntry?, includingPendingInsulin: Bool, considerPositiveVelocityAndRC: Bool, allowStalePumpData: Bool) throws -> [PredictedGlucoseValue]
 
     /// Calculates a new prediction from a manual glucose entry in the context of a meal entry
     ///
@@ -2004,7 +2030,8 @@ protocol LoopState {
         potentialCarbEntry: NewCarbEntry?,
         replacingCarbEntry replacedCarbEntry: StoredCarbEntry?,
         includingPendingInsulin: Bool,
-        considerPositiveVelocityAndRC: Bool
+        considerPositiveVelocityAndRC: Bool,
+        allowStalePumpData: Bool
     ) throws -> [PredictedGlucoseValue]
 
     /// Computes the recommended bolus for correcting a glucose prediction, optionally considering a potential carb entry.
@@ -2035,7 +2062,7 @@ extension LoopState {
     /// - Returns: An timeline of predicted glucose values
     /// - Throws: LoopError.missingDataError if prediction cannot be computed
     func predictGlucose(using inputs: PredictionInputEffect, includingPendingInsulin: Bool = false) throws -> [GlucoseValue] {
-        try predictGlucose(using: inputs, potentialBolus: nil, potentialCarbEntry: nil, replacingCarbEntry: nil, includingPendingInsulin: includingPendingInsulin, considerPositiveVelocityAndRC: true)
+        try predictGlucose(using: inputs, potentialBolus: nil, potentialCarbEntry: nil, replacingCarbEntry: nil, includingPendingInsulin: includingPendingInsulin, considerPositiveVelocityAndRC: true, allowStalePumpData: false)
     }
 }
 
@@ -2099,9 +2126,9 @@ extension LoopDataManager {
             return loopDataManager.retrospectiveCorrection.totalGlucoseCorrectionEffect
         }
 
-        func predictGlucose(using inputs: PredictionInputEffect, potentialBolus: DoseEntry?, potentialCarbEntry: NewCarbEntry?, replacingCarbEntry replacedCarbEntry: StoredCarbEntry?, includingPendingInsulin: Bool, considerPositiveVelocityAndRC: Bool) throws -> [PredictedGlucoseValue] {
+        func predictGlucose(using inputs: PredictionInputEffect, potentialBolus: DoseEntry?, potentialCarbEntry: NewCarbEntry?, replacingCarbEntry replacedCarbEntry: StoredCarbEntry?, includingPendingInsulin: Bool, considerPositiveVelocityAndRC: Bool, allowStalePumpData: Bool) throws -> [PredictedGlucoseValue] {
             dispatchPrecondition(condition: .onQueue(loopDataManager.dataAccessQueue))
-            return try loopDataManager.predictGlucose(using: inputs, potentialBolus: potentialBolus, potentialCarbEntry: potentialCarbEntry, replacingCarbEntry: replacedCarbEntry, includingPendingInsulin: includingPendingInsulin, includingPositiveVelocityAndRC: considerPositiveVelocityAndRC)
+            return try loopDataManager.predictGlucose(using: inputs, potentialBolus: potentialBolus, potentialCarbEntry: potentialCarbEntry, replacingCarbEntry: replacedCarbEntry, includingPendingInsulin: includingPendingInsulin, includingPositiveVelocityAndRC: considerPositiveVelocityAndRC, allowStalePumpData: allowStalePumpData)
         }
 
         func predictGlucoseFromManualGlucose(
@@ -2110,10 +2137,11 @@ extension LoopDataManager {
             potentialCarbEntry: NewCarbEntry?,
             replacingCarbEntry replacedCarbEntry: StoredCarbEntry?,
             includingPendingInsulin: Bool,
-            considerPositiveVelocityAndRC: Bool
+            considerPositiveVelocityAndRC: Bool,
+            allowStalePumpData: Bool
         ) throws -> [PredictedGlucoseValue] {
             dispatchPrecondition(condition: .onQueue(loopDataManager.dataAccessQueue))
-            return try loopDataManager.predictGlucoseFromManualGlucose(glucose, potentialBolus: potentialBolus, potentialCarbEntry: potentialCarbEntry, replacingCarbEntry: replacedCarbEntry, includingPendingInsulin: includingPendingInsulin, considerPositiveVelocityAndRC: considerPositiveVelocityAndRC)
+            return try loopDataManager.predictGlucoseFromManualGlucose(glucose, potentialBolus: potentialBolus, potentialCarbEntry: potentialCarbEntry, replacingCarbEntry: replacedCarbEntry, includingPendingInsulin: includingPendingInsulin, considerPositiveVelocityAndRC: considerPositiveVelocityAndRC, allowStalePumpData: allowStalePumpData)
         }
 
         func recommendBolus(consideringPotentialCarbEntry potentialCarbEntry: NewCarbEntry?, replacingCarbEntry replacedCarbEntry: StoredCarbEntry?, considerPositiveVelocityAndRC: Bool) throws -> ManualBolusRecommendation? {

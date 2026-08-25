@@ -45,6 +45,7 @@ struct AddEditFavoriteFoodView: View {
                         }
                     }
                     .navigationBarTitle(String(localized: "New Favorite Food", comment: "Title of new favorite food screen"), displayMode: .inline)
+                    .loopSoftTopEdge()
                     .onAppear {
                         expandedRow = .name
                     }
@@ -65,18 +66,20 @@ struct AddEditFavoriteFoodView: View {
                 }
                 .navigationBarBackButtonHidden(viewModel.updatedFavoriteFood != nil)
                 .navigationBarTitle(viewModel.originalFavoriteFood?.title ?? "", displayMode: .inline)
+                .loopSoftTopEdge()
         }
     }
     
     private var content: some View {
         ZStack {
-            Color(.systemGroupedBackground)
+            // New UI language: unified screen shade + glass tiles.
+            Color.loopScreenBackground
                 .edgesIgnoringSafeArea(.all)
-            
+
             ScrollView {
                 card
                     .padding(.top, 8)
-                
+
                 saveActionButton
             }
         }
@@ -110,7 +113,7 @@ struct AddEditFavoriteFoodView: View {
         }
         .padding(.vertical, 12)
         .padding(.horizontal)
-        .background(CardBackground())
+        .loopTileGlass()
         .padding(.horizontal)
     }
     
@@ -153,7 +156,7 @@ extension AddEditFavoriteFoodView {
         Button(action: viewModel.save) {
             Text("Save")
         }
-        .buttonStyle(ActionButtonStyle())
+        .buttonStyle(PillActionButtonStyle())
         .padding()
         .disabled(viewModel.updatedFavoriteFood == nil)
     }

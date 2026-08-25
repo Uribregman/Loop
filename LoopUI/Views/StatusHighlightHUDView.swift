@@ -61,7 +61,11 @@ public class StatusHighlightHUDView: UIView, NibLoadable {
         NSLayoutConstraint.activate([
             stackView.centerXAnchor.constraint(equalTo: centerXAnchor),
             stackView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stackView.widthAnchor.constraint(equalTo: widthAnchor),
+            // `<=` not `==`. Pinned to the full width the stack laid its icon and
+            // message out from the LEADING edge, so a short message like
+            // "Signal Loss" sat off to one side of the pill instead of centred.
+            // Sizing to content lets the centreX constraint above do its job.
+            stackView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor),
             stackView.heightAnchor.constraint(equalTo: heightAnchor),
         ])
     }

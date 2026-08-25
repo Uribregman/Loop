@@ -55,10 +55,9 @@ struct SystemStatusWidgetEntryView : View {
                     }
                     
                     HStack(alignment: .center, spacing: 5) {
-                        if entry.preMealPresetAllowed {
-                            SystemActionLink(to: .preMeal, active: entry.preMealPresetActive)
-                        }
-                        
+                        // AI meal shortcut replaces the pre-meal button.
+                        SystemActionLink(to: .aiMeal)
+
                         SystemActionLink(to: .customPreset, active: entry.customPresetActive)
                     }
                 }

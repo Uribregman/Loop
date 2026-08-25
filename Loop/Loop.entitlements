@@ -10,6 +10,37 @@
 	<array/>
 	<key>com.apple.developer.healthkit.background-delivery</key>
 	<true/>
+	<!-- iCloud Drive for the durable history log (Stage 2).
+	     The container id must track MAIN_APP_BUNDLE_IDENTIFIER in Loop.xcconfig
+	     plus the ".Loop" the app target appends — it is spelled out literally
+	     here and in Info.plist's NSUbiquitousContainers because the plist needs
+	     it as a dictionary KEY, where build-setting substitution is unreliable.
+	     Change one, change both.
+	     REQUIRES the iCloud capability on this App ID. Without it, DEVICE builds
+	     fail to sign; simulator builds are unaffected and will not warn you.
+	     HistoryLogStore falls back to local Documents on its own if the container
+	     is unavailable at runtime, so removing these three keys is a safe revert. -->
+	<!-- TWO containers, deliberately separate:
+	       .Loop            — iCloud DRIVE files for the history log (Step AP)
+	       .LoopFollowShare — CloudKit RECORDS for the follower feed
+	     Apple does not support mixing ubiquity files and CloudKit records in one
+	     container, and keeping them apart means a follower-sync bug cannot touch
+	     the history log. Change these and you must change
+	     FollowerShareManager.containerIdentifier to match. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.uriBregman.loopkit.basal.Loop</string>
+		<string>iCloud.com.uriBregman.loopkit.basal.LoopFollowShare</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudDocuments</string>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.ubiquity-container-identifiers</key>
+	<array>
+		<string>iCloud.com.uriBregman.loopkit.basal.Loop</string>
+	</array>
 	<key>com.apple.developer.nfc.readersession.formats</key>
 	<array>
 		<string>TAG</string>

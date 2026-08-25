@@ -96,6 +96,11 @@ extension InAppModalAlertScheduler {
             return
         }
         DispatchQueue.main.async {
+            // BEFORE the already-presented check, deliberately: a repeat of an
+            // alarm whose dialog is still on screen must still be audible.
+            // Only the user's own custom alerts play here — see AlertAudioPlayer.
+            AlertAudioPlayer.shared.play(alert)
+
             if self.isAlertPresented(identifier: alert.identifier) {
                 return
             }

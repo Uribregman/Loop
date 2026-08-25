@@ -8,6 +8,7 @@
 
 import HealthKit
 import LoopKit
+import LoopKitUI
 
 public class CGMStatusHUDViewModel {
     
@@ -27,9 +28,39 @@ public class CGMStatusHUDViewModel {
     
     var glucoseTrendIcon: UIImage? {
         guard let manualGlucoseTrendIconOverride = manualGlucoseTrendIconOverride else {
-            return trend?.image
+            return trend.flatMap(Self.uncircledTrendImage)
         }
         return manualGlucoseTrendIconOverride
+    }
+
+    /// Trend arrows WITHOUT the enclosing circle.
+    ///
+    /// `GlucoseTrend.image` in LoopKitUI returns the `.circle` variants
+    /// (`arrow.right.circle` and friends). Inside the glass pill that ring is
+    /// redundant — the pill is already the container — and it makes the arrow
+    /// read smaller than it is. Overridden here rather than in LoopKitUI, which
+    /// stays untouched.
+    ///
+    /// The two double-arrow states have no SF Symbol, so they use LoopKit's own
+    /// `arrow.double.*.fill` assets — the un-circled siblings of the
+    /// `.circle` ones it uses by default.
+    static func uncircledTrendImage(_ trend: GlucoseTrend) -> UIImage? {
+        switch trend {
+        // NOT LoopKit's `arrow.double.*.fill` assets. Despite the name those are
+        // the FILLED-CIRCLE variants — the counterpart of `arrow.up.circle.fill`
+        // — so using them put a circle back on exactly the two fastest states.
+        // `chevron.up.2` / `chevron.down.2` are two stacked chevrons: no circle,
+        // and still obviously "faster" than the single arrow beside them.
+        case .upUpUp:       return UIImage(systemName: "chevron.up.2")
+                                ?? UIImage(systemName: "arrow.up")
+        case .upUp:         return UIImage(systemName: "arrow.up")
+        case .up:           return UIImage(systemName: "arrow.up.right")
+        case .flat:         return UIImage(systemName: "arrow.right")
+        case .down:         return UIImage(systemName: "arrow.down.right")
+        case .downDown:     return UIImage(systemName: "arrow.down")
+        case .downDownDown: return UIImage(systemName: "chevron.down.2")
+                                ?? UIImage(systemName: "arrow.down")
+        }
     }
 
     private var glucoseValueCurrent: Bool {

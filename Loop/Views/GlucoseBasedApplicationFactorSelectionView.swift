@@ -46,6 +46,7 @@ public struct GlucoseBasedApplicationFactorSelectionView: View {
             .padding()
         }
         .navigationBarTitleDisplayMode(.inline)
+        .loopSoftTopEdge()
     }
 }
 

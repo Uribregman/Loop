@@ -35,6 +35,10 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
 
         self.tableView.allowsSelectionDuringEditing = true
 
+        // Entries / Meals history mode toggle in the nav bar.
+        navigationItem.titleView = modeSelector
+        tableView.register(MealSummaryCell.self, forCellReuseIdentifier: MealSummaryCell.className)
+
         carbEffectChart.glucoseDisplayRange = LoopConstants.glucoseChartDefaultDisplayBound
 
         let notificationCenter = NotificationCenter.default
@@ -71,6 +75,11 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
         }
 
         tableView.rowHeight = UITableView.automaticDimension
+        // Plain list: one hairline between entries, inset to the text, and no
+        // shaded panel behind anything.
+        tableView.separatorStyle = .singleLine
+        tableView.separatorInset = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+        tableView.backgroundColor = .systemBackground
 
         reloadData(animated: false)
     }
@@ -96,6 +105,44 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
     private var reloading = false
 
     private var carbStatuses: [CarbStatus<StoredCarbEntry>] = []
+
+    // MARK: - History display mode (per-entry vs. grouped by meal)
+
+    private enum HistoryMode: Int { case entries, meals }
+    private var historyMode: HistoryMode = .entries
+
+    /// Groups `carbStatuses` into meals using SAVED meal metadata as the source of
+    /// truth — an entry belongs to the meal it was saved with, so unrelated entries
+    /// are never mixed together. Entries with no matching meal are shown on their own.
+    private var meals: [[CarbStatus<StoredCarbEntry>]] {
+        let sorted = carbStatuses.sorted { $0.entry.startDate > $1.entry.startDate }
+        let tolerance: TimeInterval = 60
+        var claimed = [Bool](repeating: false, count: sorted.count)
+        var groups: [[CarbStatus<StoredCarbEntry>]] = []
+
+        // Claim entries for each saved meal by matching their start times.
+        for meta in MealMetadataStore.all() {
+            var group: [CarbStatus<StoredCarbEntry>] = []
+            for (i, status) in sorted.enumerated() where !claimed[i] {
+                if meta.componentStartDates.contains(where: { abs($0.timeIntervalSince(status.entry.startDate)) <= tolerance }) {
+                    claimed[i] = true
+                    group.append(status)
+                }
+            }
+            if !group.isEmpty { groups.append(group) }
+        }
+
+        // Everything else stays as its own single-entry card (never mixed).
+        for (i, status) in sorted.enumerated() where !claimed[i] {
+            groups.append([status])
+        }
+
+        groups.sort {
+            ($0.map { $0.entry.startDate }.min() ?? .distantPast) >
+            ($1.map { $0.entry.startDate }.min() ?? .distantPast)
+        }
+        return groups
+    }
 
     private var carbsOnBoard: CarbValue?
 
@@ -298,7 +345,7 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
         case .totals:
             return 1
         case .entries:
-            return carbStatuses.count
+            return historyMode == .meals ? meals.count : carbStatuses.count
         }
     }
 
@@ -327,7 +374,23 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
             return cell
         case .entries:
             let unit = HKUnit.gram()
+
+            // Meal mode: a sleek summary card per grouped meal.
+            if historyMode == .meals {
+                let mealCell = tableView.dequeueReusableCell(withIdentifier: MealSummaryCell.className, for: indexPath) as! MealSummaryCell
+                let entries = meals[indexPath.row].map { $0.entry }
+                mealCell.configure(
+                    entries: entries,
+                    metadata: MealMetadataStore.match(entries: entries),
+                    timeFormatter: timeFormatter,
+                    carbFormatter: carbFormatter
+                )
+                applyPlainCellBackground(to: mealCell)
+                return mealCell
+            }
+
             let cell = tableView.dequeueReusableCell(withIdentifier: CarbEntryTableViewCell.className, for: indexPath) as! CarbEntryTableViewCell
+            applyPlainCellBackground(to: cell)
 
             // Entry value
             let status = carbStatuses[indexPath.row]
@@ -342,18 +405,24 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
                 cell.valueLabel?.text = carbText
             }
 
-            // Entry time
+            // Entry time — show the meal time (when known) and the offset time
+            // distinctly, so they can't be confused.
             let startTime = timeFormatter.string(from: status.entry.startDate)
+            var timeText: String
+            // Always show BOTH times; without saved meal metadata the meal time
+            // equals the entry's start time.
+            let mealTimeText = MealMetadataStore.match(entries: [status.entry])
+                .map { timeFormatter.string(from: $0.mealTime) } ?? startTime
+            timeText = String(
+                format: NSLocalizedString("time: %1$@ · offset: %2$@", comment: "Entries history: (1: meal time) (2: carb offset/start time)"),
+                mealTimeText, startTime
+            )
             if  let absorptionTime = status.entry.absorptionTime,
                 let duration = absorptionFormatter.string(from: absorptionTime)
             {
-                cell.dateLabel?.text = String(
-                    format: NSLocalizedString("%1$@ + %2$@", comment: "Formats (1: carb start time) and (2: carb absorption duration)"),
-                    startTime, duration
-                )
-            } else {
-                cell.dateLabel?.text = startTime
+                timeText += " + \(duration)"
             }
+            cell.dateLabel?.text = timeText
 
             if let absorption = status.absorption {
                 // Absorbed value
@@ -443,25 +512,40 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
         case .charts, .totals:
             return false
         case .entries:
+            if historyMode == .meals {
+                return allowEditing && meals[indexPath.row].contains { $0.entry.createdByCurrentApp }
+            }
             return allowEditing && carbStatuses[indexPath.row].entry.createdByCurrentApp
         }
     }
 
     public override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
-        if editingStyle == .delete {
-            let status = carbStatuses[indexPath.row]
-            deviceManager.loopManager.deleteCarbEntry(status.entry) { (result) -> Void in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success:
-                        self.isEditing = false
-                        break  // Notification will trigger update
-                    case .failure(let error):
-                        self.refreshContext.update(with: .carbs)
-                        self.present(UIAlertController(with: error), animated: true)
-                    }
-                }
+        guard editingStyle == .delete else { return }
+
+        // Meal mode: swiping the card deletes the ENTIRE meal (all its components).
+        let entriesToDelete: [StoredCarbEntry]
+        if historyMode == .meals {
+            entriesToDelete = meals[indexPath.row].map { $0.entry }.filter { $0.createdByCurrentApp }
+        } else {
+            entriesToDelete = [carbStatuses[indexPath.row].entry]
+        }
+
+        let group = DispatchGroup()
+        var lastError: Error?
+        for entry in entriesToDelete {
+            group.enter()
+            deviceManager.loopManager.deleteCarbEntry(entry) { result in
+                if case .failure(let error) = result { lastError = error }
+                group.leave()
             }
+        }
+        group.notify(queue: .main) {
+            self.isEditing = false
+            if let lastError {
+                self.refreshContext.update(with: .carbs)
+                self.present(UIAlertController(with: lastError), animated: true)
+            }
+            // Success → the LoopDataUpdated notification triggers a refresh.
         }
     }
 
@@ -485,34 +569,125 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
         case .totals:
             return nil
         case .entries:
+            if historyMode == .meals {
+                return meals[indexPath.row].contains { $0.entry.createdByCurrentApp } ? indexPath : nil
+            }
             return (allowEditing && carbStatuses[indexPath.row].entry.createdByCurrentApp) ? indexPath : nil
         }
     }
-    
+
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        guard indexPath.row < carbStatuses.count else { return }
         tableView.deselectRow(at: indexPath, animated: true)
-        
+
+        // Meal mode: edit the whole meal in the new meal-entry screen.
+        if historyMode == .meals {
+            guard indexPath.row < meals.count else { return }
+            let entries = meals[indexPath.row].map { $0.entry }.filter { $0.createdByCurrentApp }
+            guard !entries.isEmpty else { return }
+            let viewModel = MealEntryViewModel(delegate: deviceManager, editing: entries)
+            viewModel.deleteHandler = { [weak self] entry, done in
+                self?.deviceManager.loopManager.deleteCarbEntry(entry) { _ in
+                    DispatchQueue.main.async { done() }
+                }
+            }
+            let mealEntryView = MealEntryView(viewModel: viewModel)
+                .environmentObject(deviceManager.displayGlucosePreference)
+            let hostingController = DismissibleHostingController(rootView: mealEntryView, isModalInPresentation: false)
+            present(hostingController, animated: true)
+            return
+        }
+
+        guard indexPath.row < carbStatuses.count else { return }
         let originalCarbEntry = carbStatuses[indexPath.row].entry
-        
-        let viewModel = CarbEntryViewModel(delegate: deviceManager, originalCarbEntry: originalCarbEntry)
-        let carbEntryView = CarbEntryView(viewModel: viewModel)
+
+        // Entries mode used to push the LEGACY `CarbEntryView` here while Meals
+        // mode got the redesign, so editing the same carbs looked like two
+        // different apps depending on which tab you were on. Both now use
+        // `MealEntryView`; a single entry is just a one-component meal.
+        let viewModel = MealEntryViewModel(delegate: deviceManager, editing: [originalCarbEntry])
+        viewModel.deleteHandler = { [weak self] entry, done in
+            self?.deviceManager.loopManager.deleteCarbEntry(entry) { _ in
+                DispatchQueue.main.async { done() }
+            }
+        }
+        let mealEntryView = MealEntryView(viewModel: viewModel)
             .environmentObject(deviceManager.displayGlucosePreference)
-            .environment(\.dismissAction, carbEditWasCanceled)
-        let hostingController = UIHostingController(rootView: carbEntryView)
-        hostingController.title = "Edit Carb Entry"
-        hostingController.navigationItem.largeTitleDisplayMode = .never
-        let leftBarButton = UIBarButtonItem(title: "Back", style: .plain, target: self, action: #selector(carbEditWasCanceled))
-        hostingController.navigationItem.backBarButtonItem = leftBarButton
-        navigationController?.pushViewController(hostingController, animated: true)
+        let hostingController = DismissibleHostingController(rootView: mealEntryView, isModalInPresentation: false)
+        present(hostingController, animated: true)
     }
     
     @objc func carbEditWasCanceled() {
         navigationController?.popToViewController(self, animated: true)
     }
+
+    /// Rounded liquid-glass card background matching the carb-entry tiles (24pt).
+    /// Rounded liquid-glass card behind a history row.
+    ///
+    /// ⚠️ THE THREE `.clear` LINES ARE THE WHOLE FIX, NOT TIDYING UP. The
+    /// background configuration below was already setting a 24pt radius and
+    /// inset glass — and the rows still drew as full-width square boxes. Cause:
+    /// the prototype cells come from the storyboard with an OPAQUE cell and
+    /// contentView background, and those paint on top of the configuration's
+    /// rounded, inset background. Clearing them is what lets the card show.
+    /// A `backgroundView` left from reuse does the same thing, so it goes too.
+    /// Plain row: no card, no grey panel — just the content, with the table's
+    /// own hairline separating one entry from the next.
+    ///
+    /// This deliberately REPLACED a rounded glass card. The card needed a shaded
+    /// background behind it to read as a card at all, and that shade turned the
+    /// whole list into a grey slab; the user asked for the opposite. Kept as a
+    /// function (rather than deleted at both call sites) because the two cell
+    /// types still have to agree on this, and because the two `.clear` lines are
+    /// load-bearing: the storyboard prototypes carry an opaque background that
+    /// otherwise paints over the table's.
+    ///
+    /// ⚠️ `automaticallyUpdatesBackgroundConfiguration = false` is what makes a
+    /// custom background stick at all — a cell replaces its configuration on
+    /// every state change, AFTER `cellForRowAt` returns.
+    private func applyPlainCellBackground(to cell: UITableViewCell) {
+        cell.automaticallyUpdatesBackgroundConfiguration = false
+
+        var bg = UIBackgroundConfiguration.clear()
+        bg.backgroundColor = .systemBackground
+        cell.backgroundConfiguration = bg
+
+        cell.backgroundColor = .clear
+        cell.contentView.backgroundColor = .clear
+        cell.backgroundView = nil
+        cell.selectedBackgroundView = nil
+    }
+
+    // MARK: - History mode selector (Entries / Meals)
+
+    private lazy var modeSelector: UISegmentedControl = {
+        let control = UISegmentedControl(items: [
+            NSLocalizedString("Entries", comment: "History mode: per-entry list"),
+            NSLocalizedString("Meals", comment: "History mode: grouped by meal")
+        ])
+        control.selectedSegmentIndex = 0
+        control.addTarget(self, action: #selector(historyModeChanged(_:)), for: .valueChanged)
+        return control
+    }()
+
+    @objc private func historyModeChanged(_ sender: UISegmentedControl) {
+        historyMode = HistoryMode(rawValue: sender.selectedSegmentIndex) ?? .entries
+        tableView.reloadSections(IndexSet(integer: Section.entries.rawValue), with: .automatic)
+    }
     
     // MARK: - Navigation
     @IBAction func presentCarbEntryScreen() {
+        // The "+" opens the redesigned meal-entry screen in BOTH modes now — the
+        // mode you happen to be viewing should not change what adding carbs looks
+        // like. (The simple-bolus path below is a different feature for
+        // non-looping users and is left alone.)
+        if historyMode == .meals || !(FeatureFlags.simpleBolusCalculatorEnabled && !automaticDosingStatus.automaticDosingEnabled) {
+            let viewModel = MealEntryViewModel(delegate: deviceManager)
+            let mealEntryView = MealEntryView(viewModel: viewModel)
+                .environmentObject(deviceManager.displayGlucosePreference)
+            let hostingController = DismissibleHostingController(rootView: mealEntryView, isModalInPresentation: false)
+            present(hostingController, animated: true)
+            return
+        }
         if FeatureFlags.simpleBolusCalculatorEnabled && !automaticDosingStatus.automaticDosingEnabled {
             let viewModel = SimpleBolusViewModel(delegate: deviceManager, displayMealEntry: true)
             let bolusEntryView = SimpleBolusView(viewModel: viewModel).environmentObject(DisplayGlucosePreference(displayGlucoseUnit: .milligramsPerDeciliter))

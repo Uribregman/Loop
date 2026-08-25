@@ -538,6 +538,16 @@ extension LoopAppManager: UNUserNotificationCenterDelegate {
              LoopNotificationCategory.missedMeal.rawValue:
             completionHandler([.badge, .sound, .list, .banner])
         default:
+            // The user's own custom alarms play their tone through
+            // `AlertAudioPlayer` when the in-app modal appears — louder, and
+            // audible through the ringer switch. Letting the notification play
+            // it too would double the sound, so drop `.sound` for those only.
+            let managerID = notification.request.content
+                .userInfo[LoopNotificationUserInfoKey.managerIDForAlert.rawValue] as? String
+            if let managerID, AlertAudioPlayer.isCustomLoopAlert(managerIdentifier: managerID) {
+                completionHandler([.badge, .list])
+                return
+            }
             // For all others, banners are not to be displayed while in the foreground
             completionHandler([.badge, .sound, .list])
         }

@@ -50,6 +50,8 @@ public struct SettingsView: View {
             }
             
             case favoriteFoods
+            case preferences
+            case aiCarbEstimation
         }
     }
     
@@ -84,6 +86,9 @@ public struct SettingsView: View {
                     if FeatureFlags.allowExperimentalFeatures {
                         favoriteFoodsSection
                     }
+                    if FeatureFlags.allowExperimentalFeatures {
+                        preferencesSection
+                    }
                     if (viewModel.pumpManagerSettingsViewModel.isTestingDevice || viewModel.cgmManagerSettingsViewModel.isTestingDevice) && viewModel.showDeleteTestData {
                         deleteDataSection
                     }
@@ -92,6 +97,11 @@ public struct SettingsView: View {
                     if viewModel.servicesViewModel.showServices {
                         servicesSection
                     }
+
+                    aiCarbEstimationSection
+
+                    historyLogSection
+                    followSection
 
                     ForEach(customSections) { customSectionName in
                         menuItemsForSection(name: customSectionName)
@@ -106,6 +116,7 @@ public struct SettingsView: View {
             }
             .insetGroupedListStyle()
             .navigationBarTitle(Text(NSLocalizedString("Settings", comment: "Settings screen title")))
+            .loopSoftTopEdge()
             .navigationBarItems(trailing: dismissButton)
             .actionSheet(item: $actionSheet) { actionSheet in
                 switch actionSheet {
@@ -138,6 +149,12 @@ public struct SettingsView: View {
                 switch sheet {
                 case .favoriteFoods:
                     FavoriteFoodsView()
+                case .preferences:
+                    PreferencesView(viewModel: PreferencesViewModel(preferencesProvider: Preferences.shared)).environmentObject(displayGlucosePreference)
+                case .aiCarbEstimation:
+                    NavigationView {
+                        AICarbSettingsView()
+                    }
                 }
             }
         }
@@ -252,7 +269,7 @@ extension SettingsView {
 
     private var alertManagementSection: some View {
         Section {
-            NavigationLink(destination: AlertManagementView(checker: viewModel.alertPermissionsChecker, alertMuter: viewModel.alertMuter)) {
+            NavigationLink(destination: AlertManagementView(checker: viewModel.alertPermissionsChecker, alertMuter: viewModel.alertMuter, displayGlucoseUnit: displayGlucosePreference.unit)) {
                 LargeButton(
                     action: {},
                     includeArrow: false,
@@ -377,6 +394,50 @@ extension SettingsView {
         }
     }
     
+    private var preferencesSection: some View {
+        Section {
+            LargeButton(action: { sheet = .preferences },
+                        includeArrow: true,
+                        imageView: AnyView(Image(systemName: "gearshape.fill").font(.system(size: 30, weight: .bold))),
+                        label: NSLocalizedString("Preferences", comment: "Title text for button to Preferences"),
+                        descriptiveText: NSLocalizedString("Customize your Loop experience by adjusting additional settings", comment: "Descriptive text for Preferences"))
+        }
+    }
+
+    private var aiCarbEstimationSection: some View {
+        Section {
+            LargeButton(action: { sheet = .aiCarbEstimation },
+                        includeArrow: true,
+                        imageView: AnyView(Image(systemName: "sparkles").font(.system(size: 30, weight: .bold)).foregroundColor(carbTintColor)),
+                        label: NSLocalizedString("AI Carb Estimation", comment: "Title text for button to AI Carb Estimation settings"),
+                        descriptiveText: NSLocalizedString("Optional photo-based carb estimate you confirm before saving", comment: "Descriptive text for AI Carb Estimation settings"))
+        }
+    }
+
+    private var followSection: some View {
+        Section {
+            NavigationLink(destination: FollowSettingsView()) {
+                LargeButton(action: {},
+                            includeArrow: false,
+                            imageView: AnyView(Image(systemName: "person.2.fill").font(.system(size: 26, weight: .semibold)).foregroundColor(.accentColor)),
+                            label: NSLocalizedString("Follow", comment: "Title text for button to follower settings"),
+                            descriptiveText: NSLocalizedString("Let someone see your Loop — they can change nothing", comment: "Descriptive text for follower settings"))
+            }
+        }
+    }
+
+    private var historyLogSection: some View {
+        Section {
+            NavigationLink(destination: HistoryLogView()) {
+                LargeButton(action: {},
+                            includeArrow: false,
+                            imageView: AnyView(Image(systemName: "clock.arrow.circlepath").font(.system(size: 28, weight: .semibold)).foregroundColor(.accentColor)),
+                            label: NSLocalizedString("History Log", comment: "Title text for button to history log settings"),
+                            descriptiveText: NSLocalizedString("Keep a permanent copy of your data — Loop keeps only 7 days", comment: "Descriptive text for history log settings"))
+            }
+        }
+    }
+
     private var cgmChoices: [ActionSheet.Button] {
         var result = viewModel.cgmManagerSettingsViewModel.availableDevices
             .sorted(by: {$0.localizedTitle < $1.localizedTitle})

@@ -54,6 +54,10 @@ struct SimpleBolusView: View {
                 // TODO: Fix this in Xcode 12 when we're building for iOS 14.
                 .padding(.top, self.shouldAutoScroll(basedOn: geometry) ? -200 : 0)
                 .insetGroupedListStyle()
+                // Unified screen shade (same as carb/bolus screens in dark mode).
+                .scrollContentBackground(.hidden)
+                .background(Color.loopScreenBackground.ignoresSafeArea())
+                .loopSoftTopEdge()
                 .navigationBarTitle(Text(self.title), displayMode: .inline)
                 
                 self.actionArea
@@ -243,7 +247,8 @@ struct SimpleBolusView: View {
             }
             actionButton
         }
-        .background(Color(.secondarySystemGroupedBackground).shadow(radius: 5))
+        // Same shade as the screen background so dark mode is one unified dark.
+        .background(Color.loopScreenBackground.shadow(radius: 5))
     }
     
     private var actionButton: some View {
@@ -274,7 +279,7 @@ struct SimpleBolusView: View {
             }
         )
         .disabled(viewModel.actionButtonDisabled)
-        .buttonStyle(ActionButtonStyle(.primary))
+        .buttonStyle(PillActionButtonStyle(.primary))
         .padding()
     }
     

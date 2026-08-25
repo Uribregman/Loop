@@ -267,7 +267,8 @@ final class ManualEntryDoseViewModel: ObservableObject {
                 potentialCarbEntry: nil,
                 replacingCarbEntry: nil,
                 includingPendingInsulin: true,
-                considerPositiveVelocityAndRC: true
+                considerPositiveVelocityAndRC: true,
+                allowStalePumpData: true
             )
         } catch {
             predictedGlucoseValues = []

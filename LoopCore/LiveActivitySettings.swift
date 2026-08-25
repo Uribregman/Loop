@@ -35,7 +35,7 @@ public enum BottomRowConfiguration: Codable {
         case .deltaBg:
             return NSLocalizedString("Delta", comment: "Label used for the Delta Glucose in the Live Activity view")
         case .updatedAt:
-            return NSLocalizedString("at", comment: "Label used for the Updated time value in the Live Activity view")
+            return NSLocalizedString("Updated", comment: "Label used for the last-reading-time value in the Live Activity view")
         }
     }
     
@@ -52,9 +52,9 @@ public enum BottomRowConfiguration: Codable {
         case .eventualBg:
             return NSLocalizedString("Forecasted Glucose (Eventual BG)", comment: "Description for the Forecasted Glucose selection for the Live Activity configuration")
         case .deltaBg:
-            return NSLocalizedString("Delta Glucose (Delta)", comment: "Description for the Delta Glucose selection for the Live Activity configuration")
+            return NSLocalizedString("Change Since Last Reading (Delta)", comment: "Description for the Delta Glucose selection for the Live Activity configuration")
         case .updatedAt:
-            return NSLocalizedString("Updated (at)", comment: "Description for the Updated time selection for the Live Activity configuration")
+            return NSLocalizedString("Time of Last Reading (Updated)", comment: "Description for the last-reading-time selection for the Live Activity configuration")
         }
     }
 }
@@ -71,9 +71,9 @@ public enum LiveActivityMode: Codable, CustomStringConvertible {
     public func name() -> String {
         switch self {
         case .large:
-            return NSLocalizedString("Plot and Row", comment: "Short name to choose the Lock Screen display including the the plot")
+            return NSLocalizedString("Large", comment: "Short name for the full-chart Lock Screen Live Activity layout")
         case .small:
-            return NSLocalizedString("Row Only", comment: "Short name to choose the Lock Screen display without the plot")
+            return NSLocalizedString("Small", comment: "Short name for the compact Lock Screen Live Activity layout")
         }
     }
 }

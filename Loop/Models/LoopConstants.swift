@@ -25,7 +25,7 @@ enum LoopConstants {
     static let maxCarbAbsorptionTime = TimeInterval(hours: 8)
     
     static let maxCarbEntryPastTime = TimeInterval(hours: (-12))
-    static let maxCarbEntryFutureTime = TimeInterval(hours: 1)
+    static let maxCarbEntryFutureTime = TimeInterval(hours: 4)
 
     static let maxOverrideDurationTime = TimeInterval(hours: 24)
     
@@ -59,7 +59,7 @@ enum LoopConstants {
  
     static let batteryReplacementDetectionThreshold = 0.5
  
-    static let defaultWatchCarbPickerValue = 15 // grams
+    static let defaultWatchCarbPickerValue = 20 // grams
     
     static let defaultWatchBolusPickerValue = 1.0 // %
     

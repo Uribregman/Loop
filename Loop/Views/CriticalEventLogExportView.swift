@@ -27,6 +27,7 @@ struct CriticalEventLogExportView: View {
             Spacer()
         }
         .navigationBarTitle(Text("Critical Event Logs", comment: "Critical event log export title"), displayMode: .automatic)
+        .loopSoftTopEdge()
         .navigationBarBackButtonHidden(true)
         .navigationBarItems(leading: cancelButton)
         .onAppear { self.viewModel.export() }

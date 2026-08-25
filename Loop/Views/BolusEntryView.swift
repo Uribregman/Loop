@@ -9,16 +9,21 @@
 import Combine
 import HealthKit
 import SwiftUI
+#if canImport(LoopKit)
 import LoopKit
+#endif
+#if canImport(LoopKitUI)
 import LoopKitUI
+#endif
+#if canImport(LoopUI)
 import LoopUI
+#endif
 
-
+#if canImport(LoopKitUI)
 struct BolusEntryView: View {
     @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
     @Environment(\.dismissAction) var dismiss
     @Environment(\.appName) var appName
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @ObservedObject var viewModel: BolusEntryViewModel
 
@@ -28,20 +33,26 @@ struct BolusEntryView: View {
 
     @FocusState private var bolusFieldFocused: Bool
 
-    private var accessoryClearance: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 72 : 52
-    }
 
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                List {
-                    self.chartSection
-                    self.summarySection
+                ScrollView {
+                    VStack(spacing: 16) {
+                        self.chartSection
+                            .padding(16)
+                            .loopTileGlass()
+                        self.summarySection
+                            .padding(16)
+                            .loopTileGlass()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
-                .insetGroupedListStyle()
-                
+                .background(Color.loopScreenBackground.ignoresSafeArea())
+
             }
+            .loopSoftTopEdge()
             .navigationBarTitle(self.title)
             .supportedInterfaceOrientations(.portrait)
             .alert(item: self.$viewModel.activeAlert, content: self.alert(for:))
@@ -60,8 +71,7 @@ struct BolusEntryView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if bolusFieldFocused {
-                    // Reserve space so the toolbar doesn’t overlap the field
-                    Color.clear.frame(height: accessoryClearance)
+                    keyboardAccessory
                 } else {
                     actionArea
                 }
@@ -81,6 +91,8 @@ struct BolusEntryView: View {
             VStack(spacing: 8) {
                 HStack(spacing: 0) {
                     activeCarbsLabel
+                    Spacer(minLength: 8)
+                    currentGlucoseLabel
                     Spacer(minLength: 8)
                     activeInsulinLabel
                 }
@@ -143,6 +155,16 @@ struct BolusEntryView: View {
             maxFractionDigits: 2
         )
     }
+    
+    @ViewBuilder
+    private var currentGlucoseLabel: some View {
+        LabeledQuantity(
+            label: Text("Current Glucose", comment: "Title describing current glucose value"),
+            quantity: viewModel.glucoseValues.last?.quantity, // latest glucose
+            unit: displayGlucosePreference.unit,              // mg/dL or mmol/L based on preference
+            maxFractionDigits: displayGlucosePreference.unit == .milligramsPerDeciliter ? 0 : 1
+        )
+    }
 
     private var predictedGlucoseChart: some View {
         PredictedGlucoseChartView(
@@ -173,8 +195,10 @@ struct BolusEntryView: View {
                     recommendedBolusRow
                 }
             }
-            .padding(.top, 8)
             
+
+            .padding(.top, 8)
+
             if viewModel.isManualGlucoseEntryEnabled && viewModel.potentialCarbEntry != nil {
                 potentialCarbEntryRow
             }
@@ -259,12 +283,6 @@ struct BolusEntryView: View {
                             viewModel.updateEnteredBolus(enteredBolusString)
                         }
                     }
-                    .toolbar {
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") { bolusFieldFocused = false }
-                        }
-                    }
                 bolusUnitsLabel
             }
         }
@@ -286,6 +304,36 @@ struct BolusEntryView: View {
         )
     }
 
+    /// The row shown in place of the action area while the keypad is up.
+    ///
+    /// Deliberately NOT a `ToolbarItemGroup(placement: .keyboard)`, which is
+    /// what this used to be: that placement welds the button to the keyboard's
+    /// top edge, so "Done" sat flush on the keys with nothing between them. As a
+    /// bottom safe-area inset it is lifted by the same keyboard avoidance that
+    /// moves everything else, and it can keep a deliberate gap above the keys.
+    private var keyboardAccessory: some View {
+        HStack {
+            Spacer()
+            Button(action: { bolusFieldFocused = false }) {
+                Text("Done", comment: "Button label to dismiss the keypad")
+                    .font(.body.weight(.semibold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(GlassButtonStyle(in: Capsule()))
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, Self.keyboardClearance)
+        // ⚠️ NO BACKGROUND. A filled row here paints a grey band across the full
+        // width above the keyboard — invisible against the screen background in
+        // some places, an obvious block over a tile in others. The Done pill
+        // carries its own glass; the row itself is only a position.
+    }
+
+    /// Gap between the Done row and the top of the keyboard.
+    private static let keyboardClearance: CGFloat = 12
+
     private var actionArea: some View {
         VStack(spacing: 0) {
             if viewModel.isNoticeVisible {
@@ -302,7 +350,8 @@ struct BolusEntryView: View {
             actionButton
         }
         .padding(.bottom) // FIXME: unnecessary on iPhone 8 size devices
-        .background(Color(.secondarySystemGroupedBackground).shadow(radius: 5))
+        // Same shade as the screen background so dark mode is one unified dark.
+        .background(Color.loopScreenBackground.shadow(radius: 5))
     }
 
     private func warning(for notice: BolusEntryViewModel.Notice) -> some View {
@@ -346,7 +395,7 @@ struct BolusEntryView: View {
             },
             label: { Text("Enter Fingerstick Glucose", comment: "Button text prompting manual glucose entry on bolus screen") }
         )
-        .buttonStyle(ActionButtonStyle(viewModel.primaryButton == .manualGlucoseEntry ? .primary : .secondary))
+        .buttonStyle(PillActionButtonStyle(viewModel.primaryButton == .manualGlucoseEntry ? .primary : .secondary))
         .padding([.top, .horizontal])
     }
 
@@ -366,8 +415,14 @@ struct BolusEntryView: View {
             label: {
                 switch viewModel.actionButtonAction {
                 case .saveWithoutBolusing:
+                    if viewModel.potentialCarbEntry == nil && viewModel.manualGlucoseQuantity != nil {
+                        return Text("Save Glucose", comment: "Button text to save a manual glucose entry without a bolus")
+                    }
                     return Text("Save without Bolusing", comment: "Button text to save carbs and/or manual glucose entry without a bolus")
                 case .saveAndDeliver:
+                    if viewModel.potentialCarbEntry == nil && viewModel.manualGlucoseQuantity != nil {
+                        return Text("Save Glucose & Deliver", comment: "Button text to save a manual glucose entry and deliver a bolus")
+                    }
                     return Text("Save Carbs & Deliver", comment: "Button text to save carbs and/or manual glucose entry and deliver a bolus")
                 case .enterBolus:
                     return Text("Enter Bolus", comment: "Button text to begin entering a bolus")
@@ -376,7 +431,7 @@ struct BolusEntryView: View {
                 }
             }
         )
-        .buttonStyle(ActionButtonStyle(viewModel.primaryButton == .actionButton ? .primary : .secondary))
+        .buttonStyle(PillActionButtonStyle(viewModel.primaryButton == .actionButton ? .primary : .secondary))
         .disabled(viewModel.enacting)
         .padding()
     }
@@ -449,7 +504,7 @@ struct LabeledQuantity: View {
     var maxFractionDigits: Int?
 
     var body: some View {
-        HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             label
                 .bold()
             valueText
@@ -482,13 +537,14 @@ struct LabeledQuantity: View {
 }
 
 struct LabelBackground: ViewModifier {
+    // Little status tiles (Active Carbs / Current Glucose / Active Insulin):
+    // capsule liquid glass, matching the app-wide pill/tile language.
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color(.systemGray6))
-            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .glassEffect(.regular.tint(Color.loopControlTint), in: RoundedRectangle(cornerRadius: loopTileCornerRadius, style: .continuous))
     }
 }
+
+#endif

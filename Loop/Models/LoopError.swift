@@ -7,8 +7,11 @@
 //
 
 import Foundation
+#if canImport(LoopKit)
 import LoopKit
+#endif
 
+#if canImport(LoopKit)
 enum ConfigurationErrorDetail: String, Codable {
     case pumpManager
     case basalRateSchedule
@@ -209,3 +212,4 @@ extension LoopError: LocalizedError {
         }
     }
 }
+#endif

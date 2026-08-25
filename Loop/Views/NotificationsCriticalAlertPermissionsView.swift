@@ -69,6 +69,7 @@ public struct NotificationsCriticalAlertPermissionsView: View {
         }
         .insetGroupedListStyle()
         .navigationBarTitle(Text(NSLocalizedString("Alert Permissions", comment: "Notification & Critical Alert Permissions screen title")))
+        .loopSoftTopEdge()
     }
 }
 

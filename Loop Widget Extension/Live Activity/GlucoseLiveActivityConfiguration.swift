@@ -34,6 +34,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
             }
         }
     }
+    
 
     // MARK: - Lock Screen View
 
@@ -131,8 +132,11 @@ struct GlucoseLiveActivityConfiguration: Widget {
                             .frame(height: 85)
                         }
                     }
+                } else {
+                    // Small mode has no chart — show a prominent glucose readout instead.
+                    smallModeGlucoseHeader(context: context)
                 }
-                
+
                 HStack {
                     bottomSpacer(border: false)
                     
@@ -248,6 +252,40 @@ struct GlucoseLiveActivityConfiguration: Widget {
         .background(Color.clear)
     }
     
+    /// Compact glucose readout shown in "Small" lock-screen mode (which has no
+    /// chart): current glucose + trend arrow, plus the change since the last reading.
+    @ViewBuilder
+    private func smallModeGlucoseHeader(
+        context: ActivityViewContext<GlucoseActivityAttributes>
+    ) -> some View {
+        let glucoseFormatter = NumberFormatter.glucoseFormatter(
+            for: context.state.isMmol ? HKUnit.millimolesPerLiter : HKUnit.milligramsPerDeciliter
+        )
+        let unit = context.state.isMmol
+            ? HKUnit.millimolesPerLiter.localizedShortUnitString
+            : HKUnit.milligramsPerDeciliter.localizedShortUnitString
+        let glucoseColor = !context.attributes.useLimits ? Color.primary : getGlucoseColor(context: context)
+        let currentBG = (glucoseFormatter.string(from: context.state.currentGlucose) ?? "??") + getArrowImage(context.state.trendType)
+
+        HStack(spacing: 10) {
+            loopIcon(context, size: 26)
+            Text(currentBG)
+                .font(.title3)
+                .bold()
+                .foregroundStyle(glucoseColor)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(context.state.delta + " " + unit)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                Text("since last reading", comment: "Caption under the glucose delta in the small Live Activity")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .privacySensitive()
+    }
+
     private func formatEventualBG(value: Double?, formatter: NumberFormatter) -> String {
         guard let value = value else {
             return "??"
@@ -486,5 +524,6 @@ struct GlucoseLiveActivityConfiguration: Widget {
 
         return .green
     }
+    
 
 }

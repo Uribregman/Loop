@@ -21,9 +21,41 @@ public final class BasalRateHUDView: BaseHUDView {
         didSet {
             basalRateLabel?.text = String(format: basalRateFormatString, "–")
             basalRateLabel?.textColor = .secondaryLabel
+            stabilizeBasalRateLabelWidth()
 
             accessibilityValue = LocalizedString("Unknown", comment: "Accessibility value for an unknown value")
         }
+    }
+
+    /// Pins the label to a constant width and monospaced digits.
+    ///
+    /// The rate formatter emits "+0.0", "+0.05", "+0.15" … so the text width
+    /// changed with the delivered amount, which resized this view — and with it
+    /// the whole pump capsule in the status bar, making the top row visibly
+    /// jump every time delivery changed.
+    private func stabilizeBasalRateLabelWidth() {
+        guard let label = basalRateLabel, let font = label.font else { return }
+
+        // Equal-width digits, keeping the label's existing face and size.
+        let monospacedDescriptor = font.fontDescriptor.addingAttributes([
+            .featureSettings: [[
+                UIFontDescriptor.FeatureKey.type: kNumberSpacingType,
+                UIFontDescriptor.FeatureKey.selector: kMonospacedNumbersSelector,
+            ]]
+        ])
+        let monospaced = UIFont(descriptor: monospacedDescriptor, size: 0)
+        label.font = monospaced
+        label.textAlignment = .center
+
+        // Sized for the widest rate the formatter can produce ("+0.0##").
+        let widest = String(format: basalRateFormatString, "+00.000")
+        let width = ceil((widest as NSString).size(withAttributes: [.font: monospaced]).width)
+
+        let constraint = label.widthAnchor.constraint(equalToConstant: width)
+        // Below required, so an extreme accessibility text size can still break
+        // it rather than producing an unsatisfiable layout.
+        constraint.priority = .required - 1
+        constraint.isActive = true
     }
 
     public override func tintColorDidChange() {

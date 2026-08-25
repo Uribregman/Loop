@@ -577,7 +577,8 @@ final class BolusEntryViewModel: ObservableObject {
                     potentialCarbEntry: potentialCarbEntry,
                     replacingCarbEntry: originalCarbEntry,
                     includingPendingInsulin: true,
-                    considerPositiveVelocityAndRC: true
+                    considerPositiveVelocityAndRC: true,
+                    allowStalePumpData: true
                 )
             } else {
                 predictedGlucoseValues = try state.predictGlucose(
@@ -586,7 +587,8 @@ final class BolusEntryViewModel: ObservableObject {
                     potentialCarbEntry: potentialCarbEntry,
                     replacingCarbEntry: originalCarbEntry,
                     includingPendingInsulin: true,
-                    considerPositiveVelocityAndRC: true
+                    considerPositiveVelocityAndRC: true,
+                    allowStalePumpData: true
                 )
             }
         } catch {

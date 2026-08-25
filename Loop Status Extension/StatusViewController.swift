@@ -123,13 +123,18 @@ class StatusViewController: UIViewController, NCWidgetProviding {
 
         extensionContext?.widgetLargestAvailableDisplayMode = .expanded
 
-        switch extensionContext?.widgetActiveDisplayMode ?? .compact {
-        case .expanded:
+        if #available(iOSApplicationExtension 14.0, *) {
+            // Although Today View extensions are deprecated, allow the chart to be visible for users who still run this extension.
             glucoseChartContentView.isHidden = false
-        case .compact:
-            fallthrough
-        @unknown default:
-            glucoseChartContentView.isHidden = true
+        } else {
+            switch extensionContext?.widgetActiveDisplayMode ?? .compact {
+            case .expanded:
+                glucoseChartContentView.isHidden = false
+            case .compact:
+                fallthrough
+            @unknown default:
+                glucoseChartContentView.isHidden = true
+            }
         }
 
         observers = [
@@ -144,15 +149,21 @@ class StatusViewController: UIViewController, NCWidgetProviding {
     }
     
     func widgetActiveDisplayModeDidChange(_ activeDisplayMode: NCWidgetDisplayMode, withMaximumSize maxSize: CGSize) {
-        let compactHeight = hudView.systemLayoutSizeFitting(maxSize).height + activeCarbsTitleLabel.systemLayoutSizeFitting(maxSize).height
+        if #available(iOSApplicationExtension 14.0, *) {
+            // Today View extensions are deprecated; prefer WidgetKit. Keep existing size behavior as a no-op here.
+            preferredContentSize = maxSize
+            return
+        } else {
+            let compactHeight = hudView.systemLayoutSizeFitting(maxSize).height + activeCarbsTitleLabel.systemLayoutSizeFitting(maxSize).height
 
-        switch activeDisplayMode {
-        case .expanded:
-            preferredContentSize = CGSize(width: maxSize.width, height: compactHeight + 135)
-        case .compact:
-            fallthrough
-        @unknown default:
-            preferredContentSize = CGSize(width: maxSize.width, height: compactHeight)
+            switch activeDisplayMode {
+            case .expanded:
+                preferredContentSize = CGSize(width: maxSize.width, height: compactHeight + 135)
+            case .compact:
+                fallthrough
+            @unknown default:
+                preferredContentSize = CGSize(width: maxSize.width, height: compactHeight)
+            }
         }
     }
 
@@ -161,7 +172,12 @@ class StatusViewController: UIViewController, NCWidgetProviding {
 
         coordinator.animate(alongsideTransition: {
             (UIViewControllerTransitionCoordinatorContext) -> Void in
-            self.glucoseChartContentView.isHidden = self.extensionContext?.widgetActiveDisplayMode != .expanded
+            if #available(iOSApplicationExtension 14.0, *) {
+                // Keep the chart visible on iOS 14+ for this extension.
+                self.glucoseChartContentView.isHidden = false
+            } else {
+                self.glucoseChartContentView.isHidden = self.extensionContext?.widgetActiveDisplayMode != .expanded
+            }
         })
     }
 
@@ -175,13 +191,22 @@ class StatusViewController: UIViewController, NCWidgetProviding {
         }
     }
 
+    @available(iOSApplicationExtension, introduced: 10.0, deprecated: 14.0, message: "Today View extensions are deprecated; prefer WidgetKit.")
     func widgetPerformUpdate(completionHandler: (@escaping (NCUpdateResult) -> Void)) {
+        // For iOS < 14, continue to use the NCWidgetProviding API.
         let result = update()
         completionHandler(result)
     }
+
+    // On iOS 14+, avoid referencing NCUpdateResult to prevent deprecation warnings while still updating content.
+    @available(iOSApplicationExtension 14.0, *)
+    func widgetPerformUpdate() {
+        updateForModernWidget()
+    }
     
-    @discardableResult
-    func update() -> NCUpdateResult {
+    // On iOS 14+, avoid referencing NCUpdateResult entirely to prevent deprecation warnings.
+    @available(iOSApplicationExtension 14.0, *)
+    func updateForModernWidget() {
         let group = DispatchGroup()
 
         var activeInsulin: Double?
@@ -198,7 +223,7 @@ class StatusViewController: UIViewController, NCWidgetProviding {
             }
             group.leave()
         }
-    
+
         charts.startDate = Calendar.current.nextDate(after: Date(timeIntervalSinceNow: .minutes(-5)), matching: DateComponents(minute: 0), matchingPolicy: .strict, direction: .backward) ?? Date()
 
         // Showing the whole history plus full prediction in the glucose plot
@@ -302,7 +327,7 @@ class StatusViewController: UIViewController, NCWidgetProviding {
             self.charts.predictedGlucose.glucoseUnit = unit
             self.charts.predictedGlucose.setGlucoseValues(glucose)
 
-            if let predictedGlucose = context.predictedGlucose?.samples, context.isClosedLoop == true {
+            if let predictedGlucose = context.predictedGlucose?.samples {
                 self.charts.predictedGlucose.setPredictedGlucoseValues(predictedGlucose)
             } else {
                 self.charts.predictedGlucose.setPredictedGlucoseValues([])
@@ -314,17 +339,163 @@ class StatusViewController: UIViewController, NCWidgetProviding {
             self.glucoseChartContentView.reloadChart()
         }
 
-        switch extensionContext?.widgetActiveDisplayMode ?? .compact {
-        case .expanded:
+        // Today View extensions are deprecated on iOS 14+; default to compact behavior
+        glucoseChartContentView.isHidden = false
+    }
+
+    // For iOS versions prior to 14, keep returning NCUpdateResult for NCWidgetProviding.
+    @available(iOSApplicationExtension, introduced: 10.0, deprecated: 14.0, message: "Today View extensions are deprecated; prefer WidgetKit.")
+    @discardableResult
+    func update() -> NCUpdateResult {
+        let group = DispatchGroup()
+
+        var activeInsulin: Double?
+        let carbUnit = HKUnit.gram()
+        var glucose: [StoredGlucoseSample] = []
+
+        group.enter()
+        doseStore.insulinOnBoard(at: Date()) { (result) in
+            switch result {
+            case .success(let iobValue):
+                activeInsulin = iobValue.value
+            case .failure:
+                activeInsulin = nil
+            }
+            group.leave()
+        }
+
+        charts.startDate = Calendar.current.nextDate(after: Date(timeIntervalSinceNow: .minutes(-5)), matching: DateComponents(minute: 0), matchingPolicy: .strict, direction: .backward) ?? Date()
+
+        // Showing the whole history plus full prediction in the glucose plot
+        // is a little crowded, so limit it to three hours in the future:
+        charts.maxEndDate = charts.startDate.addingTimeInterval(TimeInterval(hours: 3))
+
+        group.enter()
+        glucoseStore.getGlucoseSamples(start: charts.startDate) { (result) in
+            switch result {
+            case .failure:
+                glucose = []
+            case .success(let samples):
+                glucose = samples
+            }
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            guard let defaults = self.defaults, let context = defaults.statusExtensionContext else {
+                return
+            }
+
+            // Pump Status
+            let pumpManagerHUDView: BaseHUDView
+            if let hudViewContext = context.pumpManagerHUDViewContext,
+                let contextHUDView = PumpManagerHUDViewFromRawValue(hudViewContext.pumpManagerHUDViewRawValue, pluginManager: self.pluginManager)
+            {
+                pumpManagerHUDView = contextHUDView
+            } else {
+                pumpManagerHUDView = ReservoirVolumeHUDView.instantiate()
+            }
+            pumpManagerHUDView.stateColors = .pumpStatus
+            self.hudView.removePumpManagerProvidedView()
+            self.hudView.addPumpManagerProvidedHUDView(pumpManagerHUDView)
+
+            if let netBasal = context.netBasal {
+                self.hudView.pumpStatusHUD.basalRateHUD.setNetBasalRate(netBasal.rate, percent: netBasal.percentage, at: netBasal.start)
+            }
+
+            if let lastCompleted = context.lastLoopCompleted {
+                self.hudView.loopCompletionHUD.lastLoopCompleted = lastCompleted
+            }
+            
+            if let isClosedLoop = context.isClosedLoop {
+                self.hudView.loopCompletionHUD.loopIconClosed = isClosedLoop
+            }
+
+            let insulinFormatter: NumberFormatter = {
+                let numberFormatter = NumberFormatter()
+
+                numberFormatter.numberStyle = .decimal
+                numberFormatter.minimumFractionDigits = 2
+                numberFormatter.maximumFractionDigits = 2
+                
+                return numberFormatter
+            }()
+
+            if let activeInsulin = activeInsulin,
+                let valueStr = insulinFormatter.string(from: activeInsulin)
+            {
+                self.activeInsulinAmountLabel.text = String(format: NSLocalizedString("%1$@ U", comment: "The subtitle format describing units of active insulin. (1: localized insulin value description)"), valueStr)
+            } else {
+                self.activeInsulinAmountLabel.text = NSLocalizedString("? U", comment: "Displayed in the widget when the amount of active insulin cannot be determined.")
+            }
+
+            self.hudView.pumpStatusHUD.presentStatusHighlight(context.pumpStatusHighlightContext)
+            self.hudView.pumpStatusHUD.lifecycleProgress = context.pumpLifecycleProgressContext
+
+            // Active carbs
+            let carbsFormatter = QuantityFormatter(for: carbUnit)
+
+            if let carbsOnBoard = context.carbsOnBoard,
+               let activeCarbsNumberString = carbsFormatter.string(from: HKQuantity(unit: carbUnit, doubleValue: carbsOnBoard))
+            {
+                self.activeCarbsAmountLabel.text = String(format: NSLocalizedString("%1$@", comment: "The subtitle format describing the grams of active carbs.  (1: localized carb value description)"), activeCarbsNumberString)
+            } else {
+                self.activeCarbsAmountLabel.text = NSLocalizedString("? g", comment: "Displayed in the widget when the amount of active carbs cannot be determined.")
+            }
+
+            // CGM Status
+            self.hudView.cgmStatusHUD.presentStatusHighlight(context.cgmStatusHighlightContext)
+            self.hudView.cgmStatusHUD.lifecycleProgress = context.cgmLifecycleProgressContext
+            
+            guard let unit = context.predictedGlucose?.unit else {
+                return
+            }
+
+            if let lastGlucose = glucose.last {
+                self.hudView.cgmStatusHUD.setGlucoseQuantity(
+                    lastGlucose.quantity.doubleValue(for: unit),
+                    at: lastGlucose.startDate,
+                    unit: unit,
+                    staleGlucoseAge: LoopCoreConstants.inputDataRecencyInterval,
+                    glucoseDisplay: context.glucoseDisplay,
+                    wasUserEntered: lastGlucose.wasUserEntered,
+                    isDisplayOnly: lastGlucose.isDisplayOnly
+                )
+            }
+
+            // Charts
+            self.charts.predictedGlucose.glucoseUnit = unit
+            self.charts.predictedGlucose.setGlucoseValues(glucose)
+
+            if let predictedGlucose = context.predictedGlucose?.samples {
+                self.charts.predictedGlucose.setPredictedGlucoseValues(predictedGlucose)
+            } else {
+                self.charts.predictedGlucose.setPredictedGlucoseValues([])
+            }
+
+            self.charts.predictedGlucose.targetGlucoseSchedule = self.settingsStore.latestSettings?.glucoseTargetRangeSchedule
+            self.charts.invalidateChart(atIndex: 0)
+            self.charts.prerender()
+            self.glucoseChartContentView.reloadChart()
+        }
+
+        if #available(iOSApplicationExtension 14.0, *) {
+            // Allow visibility on iOS 14+ for this extension.
             glucoseChartContentView.isHidden = false
-        case .compact:
-            fallthrough
-        @unknown default:
-            glucoseChartContentView.isHidden = true
+        } else {
+            switch extensionContext?.widgetActiveDisplayMode ?? .compact {
+            case .expanded:
+                glucoseChartContentView.isHidden = false
+            case .compact:
+                fallthrough
+            @unknown default:
+                glucoseChartContentView.isHidden = true
+            }
         }
 
         // Right now we always act as if there's new data.
         // TODO: keep track of data changes and return .noData if necessary
-        return NCUpdateResult.newData
+        return .newData
     }
 }
+

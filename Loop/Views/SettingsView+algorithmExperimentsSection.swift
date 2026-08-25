@@ -75,6 +75,7 @@ public struct ExperimentsSettingsView: View {
             .padding()
         }
         .navigationBarTitleDisplayMode(.inline)
+        .loopSoftTopEdge()
     }
 }
 

@@ -120,6 +120,7 @@ struct HowMuteAlertWorkView: View {
             }
             .insetGroupedListStyle()
             .navigationTitle(NSLocalizedString("Managing Alerts", comment: "View title for how mute alerts work"))
+            .loopSoftTopEdge()
             .navigationBarItems(trailing: closeButton)
         }
     }

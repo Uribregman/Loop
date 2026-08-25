@@ -32,6 +32,7 @@ public struct IntegralRetrospectiveCorrectionSelectionView: View {
             .padding()
         }
         .navigationBarTitleDisplayMode(.inline)
+        .loopSoftTopEdge()
     }
     
 }

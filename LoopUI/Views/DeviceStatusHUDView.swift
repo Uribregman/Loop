@@ -46,14 +46,36 @@ import LoopKitUI
     
     @IBOutlet weak var statusStackView: UIStackView!
     
+    /// When true the built-in inline progress bar stays hidden, because the host
+    /// draws the indicator itself — see the floating tinted glass lifecycle line
+    /// in `StatusBarHUDView`.
+    public var suppressesBuiltInProgressView = false {
+        didSet {
+            if suppressesBuiltInProgressView {
+                progressView.isHidden = true
+            }
+        }
+    }
+
+    /// Notifies a host that `lifecycleProgress` changed, so it can mirror it.
+    public var lifecycleProgressDidChange: ((DeviceLifecycleProgress?) -> Void)?
+
+    /// Clears the opaque rounded background the flat bar design used. Inside a
+    /// Liquid Glass capsule that fill is what you'd actually see, not the glass.
+    public func clearOpaqueBackground() {
+        backgroundView?.backgroundColor = .clear
+    }
+
     public var lifecycleProgress: DeviceLifecycleProgress? {
         didSet {
+            defer { lifecycleProgressDidChange?(lifecycleProgress) }
+
             guard let lifecycleProgress = lifecycleProgress else {
                 resetProgress()
                 return
             }
-             
-            progressView.isHidden = false
+
+            progressView.isHidden = suppressesBuiltInProgressView
             progressView.progress = Float(lifecycleProgress.percentComplete.clamped(to: 0...1))
             progressView.tintColor = lifecycleProgress.progressState.color
         }

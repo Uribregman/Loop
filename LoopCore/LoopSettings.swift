@@ -299,3 +299,4 @@ extension LoopSettings: RawRepresentable {
         return raw
     }
 }
+

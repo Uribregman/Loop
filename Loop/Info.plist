@@ -53,6 +53,8 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>LoopLocalCacheDurationDays</key>
 	<string>$(LOOP_LOCAL_CACHE_DURATION_DAYS)</string>
 	<key>NFCReaderUsageDescription</key>
@@ -75,6 +77,18 @@
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
 	<true/>
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.uriBregman.loopkit.basal.Loop</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Loop</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>EnableOverridePresetIntent</string>
@@ -90,6 +104,8 @@
 		<string>audio</string>
 	</array>
 	<key>UIDesignRequiresCompatibility</key>
+	<false/>
+	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

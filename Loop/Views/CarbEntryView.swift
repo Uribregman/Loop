@@ -38,6 +38,7 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
                 let title = NSLocalizedString("carb-entry-title-add", value: "Add Carb Entry", comment: "The title of the view controller to create a new carb entry")
                 content
                     .navigationBarTitle(title, displayMode: .inline)
+                    .loopSoftTopEdge()
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {
                             dismissButton
@@ -305,7 +306,7 @@ extension CarbEntryView {
         Button(action: viewModel.continueToBolus) {
             Text("Continue", comment: "Button label for continue")
         }
-        .buttonStyle(ActionButtonStyle())
+        .buttonStyle(PillActionButtonStyle())
         .padding()
         .disabled(viewModel.continueButtonDisabled)
     }
