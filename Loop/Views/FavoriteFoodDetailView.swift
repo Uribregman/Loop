@@ -14,7 +14,7 @@ public struct FavoriteFoodDetailView: View {
     let food: StoredFavoriteFood?
     let onFoodDelete: (StoredFavoriteFood) -> Void
     
-    @State private var isConfirmingDelete: Bool
+    @State private var isConfirmingDelete = false
     
     let carbFormatter: QuantityFormatter
     let absorptionTimeFormatter: DateComponentsFormatter
