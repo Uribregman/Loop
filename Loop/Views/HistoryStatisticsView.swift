@@ -1840,8 +1840,14 @@ struct HistoryStatisticsView: View {
                let weekend = viewModel.stats.days.weekendInRange,
                abs(weekday - weekend) >= 0.03 {
                 Divider().opacity(0.4)
-                statRow(NSLocalizedString("Weekdays", comment: "Stat"), Self.percent(weekday))
-                statRow(NSLocalizedString("Weekends", comment: "Stat"), Self.percent(weekend))
+                // The counts travel with the numbers: "70% at weekends" means
+                // something different over 3 weekend days than over 12.
+                statRow(NSLocalizedString("Weekdays", comment: "Stat"),
+                        String(format: NSLocalizedString("%1$@ · %2$d days", comment: "Stat with day count"),
+                               Self.percent(weekday), viewModel.stats.days.weekdayCount))
+                statRow(NSLocalizedString("Weekends", comment: "Stat"),
+                        String(format: NSLocalizedString("%1$@ · %2$d days", comment: "Stat with day count"),
+                               Self.percent(weekend), viewModel.stats.days.weekendCount))
             }
             Text("Only days with a reasonable amount of sensor data are counted.", comment: "Days caveat")
                 .font(.caption)
@@ -2168,8 +2174,9 @@ struct HistoryStatisticsView: View {
            abs(weekday - weekend) >= 0.08 {
             let better = weekday > weekend
             result.append(String(
-                format: NSLocalizedString("Time in range was %1$.0f%% on weekdays against %2$.0f%% at weekends — %3$@ tend to go better.", comment: "Observation: weekday vs weekend"),
-                weekday * 100, weekend * 100,
+                format: NSLocalizedString("Time in range was %1$.0f%% across %2$d weekdays against %3$.0f%% across %4$d weekend days — %5$@ tend to go better.", comment: "Observation: weekday vs weekend"),
+                weekday * 100, stats.days.weekdayCount,
+                weekend * 100, stats.days.weekendCount,
                 better ? NSLocalizedString("weekdays", comment: "") : NSLocalizedString("weekends", comment: "")))
         }
 

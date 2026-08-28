@@ -94,8 +94,16 @@ struct HistoryStatistics {
         var meetingGoal = 0
         /// Longest run of consecutive days meeting the goal.
         var bestStreak = 0
+        /// ⚠️ NIL UNLESS THERE ARE ENOUGH DAYS OF THAT KIND. A weekend average
+        /// built from ONE Saturday is not "your weekends", and the sentence this
+        /// feeds says "tend to go better" — a habit, which needs several of each
+        /// to claim. See `minimumDaysPerWeekPart`.
         var weekdayInRange: Double?
         var weekendInRange: Double?
+        /// How many days each average is actually made of, so the screen can
+        /// show its evidence instead of asking to be trusted.
+        var weekdayCount = 0
+        var weekendCount = 0
     }
 
     /// Average change from 03:00 to 08:00 — the dawn phenomenon, quantified.
@@ -456,6 +464,10 @@ struct HistoryStatistics {
     /// CGM readings a day needs before it counts as a day for per-day averages,
     /// when nothing else happened on it. 72 is six hours at five-minute spacing.
     static let minimumReadingsForCountedDay = 72
+    /// Days needed on EACH side before weekday-vs-weekend is reported at all.
+    /// Three of each is the least that can be called a pattern rather than a
+    /// coincidence — and on a 7-day period it means the split stays silent.
+    static let minimumDaysPerWeekPart = 3
     /// Readings inside 00:00–06:00 before a night counts. 24 is two hours.
     static let minimumReadingsPerNight = 24
 
@@ -1030,8 +1042,19 @@ struct HistoryStatistics {
             if calendar.isDateInWeekend(day) { weekend.append(fraction) } else { weekday.append(fraction) }
         }
         summary.meetingGoal = goalDays.count
-        if !weekday.isEmpty { summary.weekdayInRange = weekday.reduce(0, +) / Double(weekday.count) }
-        if !weekend.isEmpty { summary.weekendInRange = weekend.reduce(0, +) / Double(weekend.count) }
+        summary.weekdayCount = weekday.count
+        summary.weekendCount = weekend.count
+        // ⚠️ A FLOOR ON EACH SIDE, NOT JUST "not empty". With `!isEmpty` a single
+        // weekend day became "your weekends", and any gap of 8 points then
+        // printed "weekends tend to go worse" as a finding. Which day counts as
+        // the weekend is the device's own calendar (`isDateInWeekend`), so this
+        // follows the user's region — Fri–Sat where that is the weekend.
+        if weekday.count >= minimumDaysPerWeekPart {
+            summary.weekdayInRange = weekday.reduce(0, +) / Double(weekday.count)
+        }
+        if weekend.count >= minimumDaysPerWeekPart {
+            summary.weekendInRange = weekend.reduce(0, +) / Double(weekend.count)
+        }
 
         // Longest consecutive run of goal days.
         var streak = 0

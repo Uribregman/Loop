@@ -4,6 +4,9 @@
     "" : {
 
     },
+    " — %d days of it have data." : {
+      "comment" : "Scope caption, days with data"
+    },
     " (pending: %@)" : {
       "comment" : "The string format appended to active insulin that describes pending insulin. (1: pending insulin)",
       "extractionState" : "manual",
@@ -3286,8 +3289,14 @@
     "4th zone" : {
       "comment" : "GRI zone"
     },
+    "7 days" : {
+      "comment" : "Period, spelled out"
+    },
     "7d" : {
       "comment" : "Statistics period: 7 days"
+    },
+    "14 days" : {
+      "comment" : "Period, spelled out"
     },
     "14d" : {
       "comment" : "Statistics period: 14 days"
@@ -3417,6 +3426,9 @@
         }
       }
     },
+    "30 days" : {
+      "comment" : "Period, spelled out"
+    },
     "30 min comparison of glucose prediction vs actual, continued with decay over 60 min" : {
       "comment" : "Description of the prediction input effect for retrospective correction",
       "localizations" : {
@@ -3545,6 +3557,9 @@
     "54–69" : {
       "comment" : "TIR band range"
     },
+    "60 days" : {
+      "comment" : "Period, spelled out"
+    },
     "60d" : {
       "comment" : "Statistics period: 60 days"
     },
@@ -3556,6 +3571,9 @@
     },
     "80–140 mg/dL" : {
       "comment" : "Tight range band"
+    },
+    "90 days" : {
+      "comment" : "Period, spelled out"
     },
     "90d" : {
       "comment" : "Statistics period: 90 days"
@@ -6606,6 +6624,9 @@
         }
       }
     },
+    "all data" : {
+      "comment" : "Period, spelled out"
+    },
     "All day" : {
       "comment" : "An alert set with no time window"
     },
@@ -6664,6 +6685,9 @@
           }
         }
       }
+    },
+    "All history" : {
+      "comment" : "Badge on tiles that ignore the period picker"
     },
     "Amount Consumed" : {
       "comment" : "Label for carb quantity entry row on carb entry screen",
@@ -18717,6 +18741,12 @@
     "Every line starts with the same three fields: v (format version), t (the kind of event) and at (when it happened, including your time zone)." : {
       "comment" : "History format shared fields"
     },
+    "Everything below covers the last %@" : {
+      "comment" : "Scope caption (1: period)"
+    },
+    "Everything below covers your whole history" : {
+      "comment" : "Scope caption, all data"
+    },
     "Everything below only fires while this set is on and inside its window." : {
       "comment" : "Footer for the alert set section"
     },
@@ -28800,6 +28830,9 @@
           }
         }
       }
+    },
+    "No weekday stands out — your days look alike." : {
+      "comment" : "Weekday peek when days are level"
     },
     "No, edit amount" : {
       "comment" : "The title of the action used when rejecting the the amount of carbohydrates entered.",
