@@ -224,6 +224,64 @@ final class HistoryStatisticsViewModel: ObservableObject {
         return (stats, previous, !current.isEmpty)
     }
 
+    // MARK: - Export
+
+    /// One period's worth of report, ready to render.
+    struct PeriodExport {
+        let id: String
+        let title: String
+        let longTitle: String
+        let model: StatsReportModel
+    }
+
+    /// The report for the period currently on screen.
+    ///
+    /// Cheap — pure formatting over statistics that are already computed — so a
+    /// single-chapter share does not recompute anything and the picture matches
+    /// the screen by construction.
+    func currentReportModel() -> StatsReportModel {
+        StatsReportModel.build(stats: stats,
+                               insights: insights,
+                               weeklyComparison: weeklyComparison,
+                               monthlyComparison: monthlyComparison,
+                               observations: HistoryStatisticsView.observations(for: stats),
+                               periodTitle: period.title,
+                               periodLongTitle: period.longTitle)
+    }
+
+    /// Every period, for the full HTML report.
+    ///
+    /// ⚠️ THIS IS THE EXPENSIVE ONE: it runs the whole statistics pass six times,
+    /// once per period, so that the exported page carries a working time filter
+    /// rather than a filter that would need the data it does not have. Off the
+    /// main thread for the same reason `recompute()` is, and the caller shows a
+    /// spinner — on a few months of history this is seconds, not milliseconds.
+    func fullReportModels() async -> [PeriodExport] {
+        let lines = allLines
+        let basal = scheduledBasalPerDay
+        let insights = self.insights
+        let weekly = weeklyComparison
+        let monthly = monthlyComparison
+
+        return await Task.detached(priority: .userInitiated) {
+            Period.allCases.map { period in
+                let result = Self.statistics(for: lines, days: period.days, scheduledBasalPerDay: basal)
+                let model = StatsReportModel.build(
+                    stats: result.current,
+                    insights: insights,
+                    weeklyComparison: weekly,
+                    monthlyComparison: monthly,
+                    observations: HistoryStatisticsView.observations(for: result.current),
+                    periodTitle: period.title,
+                    periodLongTitle: period.longTitle)
+                return PeriodExport(id: period.rawValue,
+                                    title: period.title,
+                                    longTitle: period.longTitle,
+                                    model: model)
+            }
+        }.value
+    }
+
     /// Percentage-point change in time in range against the previous window.
     var timeInRangeChange: Double? {
         guard let previous, previous.glucose.count > 0, stats.glucose.count > 0 else { return nil }
@@ -273,6 +331,26 @@ struct HistoryStatisticsView: View {
     @State private var selectedWeekStart: Date?
     @State private var weekdaySelection: String?
     @State private var selectedWeekdayName: String?
+
+    /// Set ONLY when this instance exists to be rendered into a PNG.
+    ///
+    /// ⚠️ THE EXPORT RENDERS THE REAL SCREEN. This is not a second, parallel
+    /// layout that has to be kept in step by hand — it is this view, with the
+    /// collapsibles forced open, the chrome removed and the charts labelled. A
+    /// share card therefore cannot drift away from what the user was looking at,
+    /// which is the failure mode every hand-built share card eventually has.
+    private let exportSection: StatsReportModel.SectionID?
+
+    private var isExporting: Bool { exportSection != nil }
+
+    /// The share currently being prepared, if any. Drives the small spinner in
+    /// place of that section's share icon.
+    @State private var preparingSection: StatsReportModel.SectionID?
+    @State private var isPreparingFullReport = false
+    /// Set when a share is ready; presenting the sheet is the only thing that
+    /// clears it.
+    @State private var sharePayload: StatsSharePayload?
+    @State private var shareFailed = false
 
     /// Which big tiles are expanded. Collapsed is the DEFAULT for the heavy ones:
     /// the screen was a continuous wall of charts you had to scroll past to find
@@ -342,12 +420,110 @@ struct HistoryStatisticsView: View {
     init(currentISF: Double? = nil, currentCarbRatio: Double? = nil,
          scheduledBasalPerDay: Double? = nil, showsDoneButton: Bool = false) {
         self.showsDoneButton = showsDoneButton
+        self.exportSection = nil
         _viewModel = StateObject(wrappedValue: HistoryStatisticsViewModel(
             currentISF: currentISF, currentCarbRatio: currentCarbRatio,
             scheduledBasalPerDay: scheduledBasalPerDay))
     }
 
+    /// An off-screen copy of one chapter, for `ImageRenderer`.
+    ///
+    /// Takes the LIVE view model rather than building its own, so the card is
+    /// rendered from the numbers already on screen — including the period the
+    /// user has selected, which is what the card is stamped with.
+    init(exporting section: StatsReportModel.SectionID, viewModel: HistoryStatisticsViewModel) {
+        self.showsDoneButton = false
+        self.exportSection = section
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
+
     var body: some View {
+        // ⚠️ `AnyView` for the same reason the sections are — see the note in
+        // `liveScreen`. Two differently-typed branches at the root of a view this
+        // large is exactly the nesting that overflowed the device stack.
+        if let exportSection {
+            AnyView(exportCard(exportSection))
+        } else {
+            AnyView(liveScreen)
+        }
+    }
+
+    // MARK: - The export card
+    //
+    // One chapter, laid out for a picture: a real title (the section header is
+    // suppressed while exporting), the window the numbers came from, and the
+    // disclaimer — which must travel WITH the numbers, because a card gets
+    // forwarded on its own to people who never saw this screen.
+
+    private func exportCard(_ section: StatsReportModel.SectionID) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(section.title)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                Text(exportScopeLine(section))
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                if let first = viewModel.stats.firstDate, let last = viewModel.stats.lastDate,
+                   !section.ignoresPeriod {
+                    Text("\(Self.dayFormatter.string(from: first)) – \(Self.dayFormatter.string(from: last))")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            exportSectionContent(section)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(StatsReportModel.disclaimer)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text(String(format: NSLocalizedString("Exported %@ from Loop.", comment: "Export stamp"),
+                            Self.exportStampFormatter.string(from: Date())))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 4)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.loopScreenBackground)
+    }
+
+    /// The one line that says exactly what window the card describes.
+    ///
+    /// ⚠️ NEVER OMITTED. A time-in-range figure with no window attached is not a
+    /// weaker statement, it is an unreadable one — 78% over a week and 78% over
+    /// ninety days are different claims.
+    private func exportScopeLine(_ section: StatsReportModel.SectionID) -> String {
+        section.ignoresPeriod
+            ? NSLocalizedString("All recorded history", comment: "Export scope")
+            : String(format: NSLocalizedString("Last %@", comment: "Export scope"), viewModel.period.longTitle)
+    }
+
+    @ViewBuilder
+    private func exportSectionContent(_ section: StatsReportModel.SectionID) -> some View {
+        switch section {
+        case .overview: headlineSection
+        case .progress: progressSection
+        case .when:     whenSection
+        case .meals:    mealsSection
+        case .safety:   safetySection
+        case .deeper:   goingDeeperSection
+        case .supplies: suppliesSection
+        case .review:   reviewSection
+        }
+    }
+
+    private static let exportStampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    // MARK: - The live screen
+
+    private var liveScreen: some View {
         ZStack {
             Color.loopScreenBackground.ignoresSafeArea()
             ScrollView {
@@ -434,6 +610,16 @@ struct HistoryStatisticsView: View {
             guard phase == .active, viewModel.hasLoadedOnce else { return }
             viewModel.load()
         }
+        .sheet(item: $sharePayload) { payload in
+            StatsActivityView(items: payload.activityItems)
+        }
+        .alert(NSLocalizedString("Could not prepare the share", comment: "Share failure title"),
+               isPresented: $shareFailed) {
+            Button(NSLocalizedString("OK", comment: "Dismiss")) { }
+        } message: {
+            Text("Nothing was written and nothing was sent. Try again, or share a different section.",
+                 comment: "Share failure message")
+        }
     }
 
     // MARK: - Sections
@@ -444,6 +630,21 @@ struct HistoryStatisticsView: View {
 
     private var headlineSection: AnyView {
         AnyView(VStack(spacing: 16) {
+            // The overview is the top of the screen and deliberately has no
+            // section heading — so its share control gets a row of its own
+            // rather than being hidden inside the time-in-range tile, where it
+            // would look like it shared only that one tile.
+            if !isExporting {
+                HStack(spacing: 6) {
+                    Spacer()
+                    StatsShareButton(title: StatsReportModel.SectionID.overview.title,
+                                     isBusy: preparingSection == .overview) {
+                        share(.overview)
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.bottom, -12)
+            }
             // Headline, then immediately the "so what". Observations used to sit
             // at the bottom, below a dozen tiles — the wrong end for the most
             // useful thing on the screen.
@@ -457,7 +658,7 @@ struct HistoryStatisticsView: View {
         guard viewModel.stats.weeklyTrend.count >= 2 || viewModel.stats.days.counted >= 3
                 || !viewModel.weeklyComparison.isEmpty else { return AnyView(EmptyView()) }
         return AnyView(VStack(spacing: 16) {
-            sectionHeader(NSLocalizedString("Progress", comment: "Section header"))
+            sectionHeader(NSLocalizedString("Progress", comment: "Section header"), share: .progress)
             if viewModel.stats.weeklyTrend.count >= 2 { weeklyTrendTile }
             // Spans ALL history regardless of the period picker, so it shows
             // whenever there is any history at all.
@@ -470,7 +671,7 @@ struct HistoryStatisticsView: View {
         guard viewModel.stats.hourlyProfile.count >= 6 || viewModel.stats.weekdayProfile.count >= 4
         else { return AnyView(EmptyView()) }
         return AnyView(VStack(spacing: 16) {
-            sectionHeader(NSLocalizedString("When", comment: "Section header"))
+            sectionHeader(NSLocalizedString("When", comment: "Section header"), share: .when)
             if viewModel.stats.hourlyProfile.count >= 6 { hourlyTile }
             if viewModel.stats.weekdayProfile.count >= 4 { weekdayTile }
             dayNightTile
@@ -481,7 +682,7 @@ struct HistoryStatisticsView: View {
         guard viewModel.stats.postMeal.mealsAnalysed >= 3 || !viewModel.stats.mealWindows.isEmpty
         else { return AnyView(EmptyView()) }
         return AnyView(VStack(spacing: 16) {
-            sectionHeader(NSLocalizedString("Meals", comment: "Section header"))
+            sectionHeader(NSLocalizedString("Meals", comment: "Section header"), share: .meals)
             if viewModel.stats.postMeal.mealsAnalysed >= 3 { postMealTile }
             if !viewModel.stats.mealSizeOutcomes.isEmpty { mealSizeTile }
             if !viewModel.stats.mealWindows.isEmpty { mealWindowsTile }
@@ -492,7 +693,7 @@ struct HistoryStatisticsView: View {
         guard viewModel.stats.lowEvents.count > 0 || viewModel.stats.nights.total > 0
         else { return AnyView(EmptyView()) }
         return AnyView(VStack(spacing: 16) {
-            sectionHeader(NSLocalizedString("Safety", comment: "Section header"))
+            sectionHeader(NSLocalizedString("Safety", comment: "Section header"), share: .safety)
             safetyTile
             if !viewModel.stats.bedtimeOutcomes.isEmpty { bedtimeTile }
         })
@@ -501,7 +702,7 @@ struct HistoryStatisticsView: View {
     private var goingDeeperSection: AnyView {
         guard viewModel.stats.glucose.count >= 200 else { return AnyView(EmptyView()) }
         return AnyView(VStack(spacing: 16) {
-            sectionHeader(NSLocalizedString("Going Deeper", comment: "Section header"))
+            sectionHeader(NSLocalizedString("Going Deeper", comment: "Section header"), share: .deeper)
             riskTile
             variabilityTile
         })
@@ -509,7 +710,7 @@ struct HistoryStatisticsView: View {
 
     private var suppliesSection: AnyView {
         AnyView(VStack(spacing: 16) {
-            sectionHeader(NSLocalizedString("Insulin & Supplies", comment: "Section header"))
+            sectionHeader(NSLocalizedString("Insulin & Supplies", comment: "Section header"), share: .supplies)
             loopActivityTile
             supplyTile
         })
@@ -520,7 +721,7 @@ struct HistoryStatisticsView: View {
             // Deliberately spans ALL history and says so: therapy evidence must
             // not move because someone tapped "7d".
             HStack(alignment: .firstTextBaseline) {
-                sectionHeader(NSLocalizedString("Settings Review", comment: "Section header"))
+                sectionHeader(NSLocalizedString("Settings Review", comment: "Section header"), share: .review)
                 allHistoryBadge
             }
             TherapyInsightsSection(insights: viewModel.insights)
@@ -534,17 +735,35 @@ struct HistoryStatisticsView: View {
         VStack(alignment: .leading, spacing: 12, content: content)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18)
-            .loopTileGlass()
+            .loopExportableTileBackground(isExporting)
     }
 
     /// Groups the tiles into chapters. Without these the screen is a wall of
     /// equally-weighted cards and there is no way to skim it.
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.title3.weight(.semibold))
+    ///
+    /// - Parameter share: the chapter this header names. Given one, the header
+    ///   carries that chapter's share control.
+    ///
+    /// ⚠️ RETURNS NOTHING WHILE EXPORTING. The card draws its own large title,
+    /// and a second, smaller heading underneath it read as a mistake.
+    @ViewBuilder
+    private func sectionHeader(_ text: String, share: StatsReportModel.SectionID? = nil) -> some View {
+        if !isExporting {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(text)
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                if let share {
+                    StatsShareButton(title: text, isBusy: preparingSection == share) {
+                        self.share(share)
+                    }
+                    .offset(y: 2)
+                }
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 8)
             .padding(.horizontal, 4)
+        }
     }
 
     private func tileTitle(_ text: String) -> some View {
@@ -570,7 +789,9 @@ struct HistoryStatisticsView: View {
         @ViewBuilder peek: () -> Peek,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        let isExpanded = expandedTiles.contains(key)
+        // ⚠️ ALWAYS OPEN IN AN EXPORT. A collapsed tile in a picture is a tile
+        // whose contents the reader can never reach — there is nothing to tap.
+        let isExpanded = isExporting || expandedTiles.contains(key)
         return tile {
             Button {
                 // Animated so the tile grows rather than snapping, and so the
@@ -583,10 +804,14 @@ struct HistoryStatisticsView: View {
                     tileTitle(title)
                     if ignoresPeriod { allHistoryBadge }
                     Spacer()
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                    // No chevron on a card: it advertises an interaction the
+                    // picture cannot honour.
+                    if !isExporting {
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                    }
                 }
                 .contentShape(Rectangle())
             }
@@ -604,6 +829,22 @@ struct HistoryStatisticsView: View {
                     // it does not appear to move.
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
+        }
+    }
+
+    /// A bar's own value, drawn only in an export.
+    ///
+    /// Always attached to the mark, empty when not exporting: keeping the
+    /// annotation unconditional keeps the chart content one stable type, which
+    /// matters on a screen that has already overflowed the device stack once by
+    /// growing its generic types.
+    @ViewBuilder
+    private func exportBarLabel(_ text: String) -> some View {
+        if isExporting {
+            Text(text)
+                .font(.system(size: 10, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -653,7 +894,9 @@ struct HistoryStatisticsView: View {
                     .foregroundStyle(.tertiary)
                 Spacer()
             }
-        } else {
+        } else if !isExporting {
+            // ⚠️ Never in an export: inviting the reader to drag across a PNG is
+            // instructing them to do something impossible.
             Text("Touch and drag across the chart to read any hour.", comment: "Scrub hint")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -939,7 +1182,7 @@ struct HistoryStatisticsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .loopTileGlass()
+        .loopExportableTileBackground(isExporting)
     }
 
     // MARK: When control slips
@@ -1046,6 +1289,25 @@ struct HistoryStatisticsView: View {
                         )
                         .symbolSize(28)
                         .foregroundStyle(Color.accentColor)
+                    }
+                }
+
+                // Every hour's median, printed. Same rule as the bars: an
+                // exported AGP with no numbers on it is a shape, not a chart.
+                // The symbol is sized to nothing — only the annotation is wanted.
+                if isExporting {
+                    ForEach(viewModel.stats.hourlyProfile) { point in
+                        PointMark(
+                            x: .value(NSLocalizedString("Hour", comment: "Chart axis"), point.hour),
+                            y: .value(NSLocalizedString("Glucose", comment: "Chart axis"), point.median)
+                        )
+                        .symbolSize(0)
+                        .annotation(position: .top, alignment: .center, spacing: 1) {
+                            Text(String(format: "%.0f", point.median))
+                                .font(.system(size: 8, weight: .medium))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -1267,6 +1529,12 @@ struct HistoryStatisticsView: View {
                 .cornerRadius(4)
                 .foregroundStyle(GlucoseBandColor.inRange)
                 .opacity(selectedWeekStart == nil || selectedWeekStart == point.weekStart ? 1 : 0.35)
+                // ⚠️ THE NUMBER GOES ON THE BAR WHEN EXPORTING. On screen you
+                // tap a column to read it; a picture cannot be tapped, so an
+                // unlabelled export is a chart with its values removed.
+                .annotation(position: .top, alignment: .center, spacing: 2) {
+                    exportBarLabel(Self.percent(point.inRange))
+                }
                 // The 70% goal, drawn once as a recessive reference rather than
                 // repeated as a label on every bar.
                 RuleMark(y: .value("", 70))
@@ -1316,7 +1584,9 @@ struct HistoryStatisticsView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("Clear selection", comment: "Clear the selected chart column"))
             }
-        } else {
+        } else if !isExporting {
+            // The columns carry their own numbers in an export; the invitation
+            // to tap them does not survive the trip.
             Text("Tap a column to see its numbers.", comment: "Bar chart selection hint")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -1344,7 +1614,9 @@ struct HistoryStatisticsView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("Clear selection", comment: "Clear the selected chart column"))
             }
-        } else {
+        } else if !isExporting {
+            // The columns carry their own numbers in an export; the invitation
+            // to tap them does not survive the trip.
             Text("Tap a column to see its numbers.", comment: "Bar chart selection hint")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -1412,6 +1684,9 @@ struct HistoryStatisticsView: View {
                     .cornerRadius(4)
                     .foregroundStyle(comparisonMetric.color)
                     .opacity(selectedPeriodStart == nil || selectedPeriodStart == point.start ? 1 : 0.35)
+                    .annotation(position: .top, alignment: .center, spacing: 2) {
+                        exportBarLabel(comparisonMetric.formatted(point))
+                    }
 
                     if comparisonMetric == .timeInRange {
                         // The 70% goal, drawn once as a recessive reference —
@@ -1499,7 +1774,9 @@ struct HistoryStatisticsView: View {
                     .monospacedDigit()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
+        } else if !isExporting {
+            // The columns carry their own numbers in an export; the invitation
+            // to tap them does not survive the trip.
             Text("Tap a column to see its numbers.", comment: "Bar chart selection hint")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -1714,6 +1991,9 @@ struct HistoryStatisticsView: View {
                 .foregroundStyle(GlucoseBandColor.inRange)
                 .opacity(selectedWeekdayName == nil
                          || selectedWeekdayName == Self.weekdayName(point.weekday) ? 1 : 0.35)
+                .annotation(position: .top, alignment: .center, spacing: 2) {
+                    exportBarLabel(Self.percent(point.inRange))
+                }
             }
             // Categorical axis, so the selection IS the bar's name — no snapping
             // needed here, unlike the two date-axis charts.
@@ -2200,14 +2480,106 @@ struct HistoryStatisticsView: View {
 
     // MARK: Share
 
+    @ViewBuilder
     private var shareButton: some View {
-        ShareLink(item: Self.summaryText(viewModel.stats, period: viewModel.period)) {
-            Label(NSLocalizedString("Share Summary", comment: "Share the statistics summary"),
-                  systemImage: "square.and.arrow.up")
-                .frame(maxWidth: .infinity)
+        if !isExporting {
+            VStack(spacing: 10) {
+                Button {
+                    shareFullReport()
+                } label: {
+                    Label(isPreparingFullReport
+                          ? NSLocalizedString("Preparing…", comment: "Full report is being built")
+                          : NSLocalizedString("Share Full Report", comment: "Share the whole statistics screen"),
+                          systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillActionButtonStyle(.primary))
+                .disabled(isPreparingFullReport || !viewModel.hasData)
+
+                Text("A single web page holding every section — and every time period, so whoever opens it can switch between 7 days and all history for themselves. Individual sections share as a picture, fixed at the period you are looking at now.",
+                     comment: "Explanation of the two share shapes")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                ShareLink(item: Self.summaryText(viewModel.stats, period: viewModel.period)) {
+                    Label(NSLocalizedString("Share Text Summary", comment: "Share the statistics summary as text"),
+                          systemImage: "text.alignleft")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillActionButtonStyle(.secondary))
+            }
+            .padding(.top, 4)
         }
-        .buttonStyle(PillActionButtonStyle(.secondary))
-        .padding(.top, 4)
+    }
+
+    // MARK: Preparing a share
+
+    /// Share one chapter.
+    ///
+    /// Picture or web page is decided by the CHAPTER, not by a menu: a chapter
+    /// carrying a control with several options (Compare Periods) cannot be
+    /// honestly flattened into one image, so it goes as HTML where its controls
+    /// still work. Everything else is a picture, which is what people actually
+    /// want to paste into a message.
+    private func share(_ section: StatsReportModel.SectionID) {
+        guard preparingSection == nil, !isPreparingFullReport else { return }
+        preparingSection = section
+
+        // A hop through the main queue so the spinner is on screen before the
+        // render begins — `ImageRenderer` is synchronous and blocks it.
+        Task { @MainActor in
+            await Task.yield()
+            defer { preparingSection = nil }
+
+            if section.needsInteractivity {
+                let model = viewModel.currentReportModel()
+                let html = StatsHTMLReport.section(section,
+                                                   model: model,
+                                                   weeklyComparison: viewModel.weeklyComparison,
+                                                   monthlyComparison: viewModel.monthlyComparison,
+                                                   generated: Date())
+                guard let url = StatsShareRenderer.write(Data(html.utf8),
+                                                         named: "loop-\(section.rawValue)",
+                                                         extension: "html") else {
+                    shareFailed = true
+                    return
+                }
+                sharePayload = StatsSharePayload(urls: [url], text: nil)
+            } else {
+                guard let url = StatsShareRenderer.image(of: section, viewModel: viewModel) else {
+                    shareFailed = true
+                    return
+                }
+                sharePayload = StatsSharePayload(urls: [url], text: nil)
+            }
+        }
+    }
+
+    /// The whole screen, every period, as one web page.
+    private func shareFullReport() {
+        guard !isPreparingFullReport, preparingSection == nil else { return }
+        isPreparingFullReport = true
+
+        Task { @MainActor in
+            defer { isPreparingFullReport = false }
+            let models = await viewModel.fullReportModels()
+            let html = StatsHTMLReport.full(
+                models: models.map { (id: $0.id, title: $0.title, longTitle: $0.longTitle, model: $0.model) },
+                weeklyComparison: viewModel.weeklyComparison,
+                monthlyComparison: viewModel.monthlyComparison,
+                selected: viewModel.period.rawValue,
+                generated: Date())
+            guard let url = StatsShareRenderer.write(Data(html.utf8),
+                                                     named: "loop-statistics",
+                                                     extension: "html") else {
+                shareFailed = true
+                return
+            }
+            sharePayload = StatsSharePayload(
+                urls: [url],
+                text: Self.summaryText(viewModel.stats, period: viewModel.period))
+        }
     }
 
     static func summaryText(_ stats: HistoryStatistics,
