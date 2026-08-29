@@ -140,9 +140,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         tableView.estimatedRowHeight = 74
 
-        // Estimate an initial value
-        landscapeMode = UIScreen.main.bounds.size.width > UIScreen.main.bounds.size.height
-
         addScenarioStepGestureRecognizers()
 
         tableView.backgroundColor = .secondarySystemBackground
@@ -252,20 +249,24 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }
 
     /// Gap between the status pills and the island below them.
-    private static let islandGapWithoutLine: CGFloat = 14
-    /// Wider when an expiry line is showing, so the island clears the line
-    /// rather than sitting right under it.
-    private static let islandGapWithLine: CGFloat = 22
+    ///
+    /// 🐛 There used to be two of these — 14pt normally, 22pt when a pump or CGM
+    /// expiry line was showing — on the theory that the island needed extra air
+    /// to clear the line. It did not: the line lives INSIDE the pills' own
+    /// height, so its 4pt gap and 6pt bar already push the island down. The
+    /// second constant added 8pt on top of that, so the same island sat 18pt
+    /// lower whenever an expiry line happened to be visible, and the gap
+    /// appeared to change at random as pods aged in and out of their warning
+    /// window. One constant, always — the line pays for its own space.
+    private static let islandGap: CGFloat = 14
 
     /// The gap currently used BOTH above the island (the stack's spacing) and
     /// below it (the SwiftUI view's own bottom padding). One value, so the
     /// island always sits with equal air on each side.
-    private var currentIslandGap: CGFloat {
-        floatingHUDView.showsLifecycleLine ? Self.islandGapWithLine : Self.islandGapWithoutLine
-    }
+    private var currentIslandGap: CGFloat { Self.islandGap }
 
     /// The gap the island is currently drawing above and below itself.
-    private var renderedIslandGap: CGFloat = StatusTableViewController.islandGapWithoutLine
+    private var renderedIslandGap: CGFloat = StatusTableViewController.islandGap
 
     private func updateIslandSpacing() {
         let gap = currentIslandGap
@@ -448,6 +449,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        healFloatingHeaderVisibility()
         updateFloatingHeaderInset()
 
         // Deferred to here, not `viewWillAppear`: the header's height — and so
@@ -456,6 +458,31 @@ final class StatusTableViewController: LoopChartsTableViewController {
         if needsScrollToTop {
             needsScrollToTop = false
             scrollToTop()
+        }
+    }
+
+    /// Put the top header back if it is hidden while it has no business being
+    /// hidden. Deliberately **show-only**: it can never take the header away, so
+    /// running it on every layout pass cannot introduce a new way to lose it —
+    /// mid-push, mid-swipe and behind a sheet it simply does nothing.
+    ///
+    /// This is the backstop for the "HUD disappeared until I restarted the app"
+    /// class of bug. The individual causes are fixed at their source (see
+    /// `landscapeMode`); this makes sure that any cause we have NOT found still
+    /// heals itself on the next layout pass instead of persisting for the life of
+    /// the process.
+    private func healFloatingHeaderVisibility() {
+        guard floatingHeaderView.superview != nil else { return }
+
+        if shouldShowHUD, floatingHUDView.isHidden {
+            floatingHUDView.isHidden = false
+        }
+
+        let shouldShow = navigationController?.topViewController === self
+            && presentedViewController == nil
+        if shouldShow, floatingHeaderView.isHidden {
+            floatingHeaderView.isHidden = false
+            floatingHeaderView.alpha = 1
         }
     }
 
@@ -738,8 +765,24 @@ final class StatusTableViewController: LoopChartsTableViewController {
         }
     }
 
-    // Toggles the display mode based on the screen aspect ratio. Should not be updated outside of reloadData().
-    private var landscapeMode = false
+    // Toggles the display mode based on the screen aspect ratio.
+    //
+    // 🐛 This used to be stored, written ONLY from `viewWillTransition` by way of
+    // `refreshContext.newSize`. That made it a latch: anything that set it true
+    // and was not followed by another size-carrying reload left the whole top HUD
+    // hidden until the app was killed and relaunched — which is exactly the
+    // "pills vanished, had to restart" report. Derived from the current geometry
+    // instead, so every layout pass answers the question afresh and a wrong
+    // answer cannot outlive the condition that caused it.
+    private var landscapeMode: Bool {
+        let size = view.bounds.size
+        guard size.width > 0, size.height > 0 else {
+            // No geometry yet (before the first layout). Portrait is the safe
+            // default: it SHOWS the HUD, so a bad guess here cannot hide it.
+            return false
+        }
+        return size.width > size.height
+    }
 
     private var lastLoopError: Error?
 
@@ -1447,18 +1490,17 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         self.statusRowMode = statusRowMode
 
-        if let newSize = newSize {
-            landscapeMode = newSize.width > newSize.height
-        }
-
         let hudIsVisible = self.shouldShowHUD
 
         hudView?.cgmStatusHUD?.isVisible = hudIsVisible
 
         // The HUD is no longer a row — show/hide the floating bar instead and let
-        // the layout pass re-reserve its inset.
+        // the layout pass re-reserve its inset. Assigned unconditionally, because
+        // `shouldShowHUD` is now derived: `hudWasVisible` and `hudIsVisible` agree
+        // whenever the geometry has not changed, and gating the assignment on them
+        // would mean nothing ever put the bar back.
+        floatingHUDView.isHidden = !hudIsVisible
         if hudWasVisible != hudIsVisible {
-            floatingHUDView.isHidden = !hudIsVisible
             view.setNeedsLayout()
         }
 
