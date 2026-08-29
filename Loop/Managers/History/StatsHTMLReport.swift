@@ -53,8 +53,13 @@ enum StatsHTMLReport {
         var panels = ""
         for entry in models {
             let isSelected = entry.id == selected
+            // ⚠️ EVERY PANEL CARRIES ITS OWN HEADING, hidden again once scripting
+            // proves to be alive. Without it, a reader in a viewer that cannot
+            // run the filter sees six sets of numbers with nothing saying which
+            // window each one covers — which is worse than no filter at all.
             panels += """
             <section class="panel\(isSelected ? " is-selected" : "")" data-period="\(escape(entry.id))">
+            <h2 class="panel-title">\(escape(panelHeading(entry.id, entry.longTitle)))</h2>
             \(sectionsHTML(entry.model, skipping: [.review]))
             </section>
             """
@@ -80,6 +85,7 @@ enum StatsHTMLReport {
           <span class="chips-label">\(escape(NSLocalizedString("Period", comment: "Filter label")))</span>
           \(chips)
         </nav>
+        <p class="static-note">\(escape(NSLocalizedString("Every time period is shown below, one after another. Open this file in a web browser to switch between them instead.", comment: "No-script explanation")))</p>
         <p class="scope" id="scope"></p>
         \(panels)
         \(comparisonHTML(weekly: weeklyComparison, monthly: monthlyComparison))
@@ -101,6 +107,13 @@ enum StatsHTMLReport {
         """
         (function () { setTimeout(function () { location.reload(); }, \(max(60, seconds)) * 1000); })();
         """
+    }
+
+    /// "Last 30 days" — but "All data", because "Last all data" is not English.
+    private static func panelHeading(_ id: String, _ longTitle: String) -> String {
+        id == "all"
+            ? NSLocalizedString("All recorded history", comment: "Panel heading for all data")
+            : String(format: NSLocalizedString("Last %@", comment: "Panel heading"), longTitle)
     }
 
     /// One chapter, fixed at the period the exporter was looking at.
@@ -215,8 +228,13 @@ enum StatsHTMLReport {
                 } else {
                     content = svgColumns(chart) + comparisonTable(points)
                 }
+                // Pre-selected in the MARKUP, not by the script, so exactly one
+                // chart is visible in a viewer that never runs the script. The
+                // table underneath carries every metric for every period anyway,
+                // so nothing is actually lost when the selects are dead.
+                let isDefault = granularity == "week" && metric == .timeInRange
                 charts += """
-                <div class="cmp" data-granularity="\(granularity)" data-metric="\(metric.rawValue)">\(content)</div>
+                <div class="cmp\(isDefault ? " is-selected" : "")" data-granularity="\(granularity)" data-metric="\(metric.rawValue)">\(content)</div>
                 """
             }
         }
@@ -596,7 +614,7 @@ enum StatsHTMLReport {
     .svg-chart .inner { fill: var(--accent); opacity: 0.28; }
     .svg-chart .median { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linejoin: round; }
     .svg-chart .dot { fill: var(--accent); }
-    .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+    .chips { flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
     .chips-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--faint); }
     .chip {
       font: inherit; font-size: 14px; font-weight: 600; padding: 7px 14px; border: 0;
@@ -604,9 +622,27 @@ enum StatsHTMLReport {
     }
     .chip.is-selected { background: var(--chip-on); color: var(--chip-on-ink); }
     .scope { color: var(--dim); font-size: 13.5px; margin: 4px 0 8px; }
-    .panel { display: none; }
-    .panel.is-selected { display: block; }
-    .controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+    /* ⚠️ PROGRESSIVE ENHANCEMENT, AND IT IS LOAD-BEARING, NOT TIDINESS.
+       This file is opened by iOS Quick Look, by Mail, by the Files preview and
+       by anything else someone taps it in — most of which render HTML with
+       JAVASCRIPT DISABLED. The first version hid five of six periods by default
+       and revealed one with a script, so in every one of those viewers the
+       filter did nothing and five sixths of the report was simply invisible.
+       Now the default state shows EVERYTHING, and the script has to prove it is
+       alive (by setting `js` on <html>) before anything is hidden. Never write a
+       rule here that hides content unless it is scoped to `.js`. */
+    .panel { display: block; }
+    .panel-title { font-size: 24px; margin: 34px 0 4px; letter-spacing: -0.02em; }
+    .chips { display: none; }
+    .js .chips { display: flex; }
+    .js .panel { display: none; }
+    .js .panel.is-selected { display: block; }
+    .js .panel-title { display: none; }
+    .js .static-note { display: none; }
+    .static-note { color: var(--dim); font-size: 13px; margin: 2px 0 0; max-width: 60ch; }
+    .controls { display: none; }
+    .js .controls { display: flex; }
+    .controls { gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
     .controls label { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
     .controls select {
       font: inherit; font-size: 14px; padding: 5px 8px; border-radius: 9px;
@@ -630,6 +666,11 @@ enum StatsHTMLReport {
             .joined(separator: ",")
         return """
         (function () {
+          // ⚠️ FIRST LINE, AND IT MATTERS. Everything the stylesheet hides is
+          // scoped to `.js`. Until this runs, the page shows every period; if it
+          // never runs — Quick Look, Mail, a locked-down browser — the page stays
+          // complete instead of collapsing to a filter that does not work.
+          document.documentElement.classList.add('js');
           var meta = {\(entries)};
           var scope = document.getElementById('scope');
           function select(id) {
@@ -654,6 +695,10 @@ enum StatsHTMLReport {
 
     private static let comparisonScript = """
     (function () {
+      // Same contract as the period script: prove scripting works before the
+      // stylesheet is allowed to hide anything. Harmless when both scripts run —
+      // the class is simply set twice.
+      document.documentElement.classList.add('js');
       var g = document.getElementById('granularity'), m = document.getElementById('metric');
       if (!g || !m) { return; }
       function apply() {
