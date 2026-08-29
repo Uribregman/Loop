@@ -20,6 +20,18 @@ import LoopKitUI
 /// with the tiles — these numbers must never appear without it.
 struct TherapyInsightsSection: View {
     let insights: TherapyInsights
+    /// True while this is being rendered into a shareable PNG.
+    ///
+    /// 🐛 WITHOUT THIS THE WHOLE SECTION EXPORTED AS AN UNREADABLE BLACK SLAB.
+    /// `loopTileGlass` is a live compositing effect: it samples what is behind it
+    /// on a real screen, and `ImageRenderer` has no screen. Every other tile on
+    /// the statistics screen goes through `loopExportableTileBackground`, which
+    /// swaps in a solid fill for exactly this reason — this section builds its
+    /// own tiles and was missed, so it was the one card that came out black.
+    ///
+    /// ⚠️ Any new tile style anywhere on that screen has to come through the same
+    /// modifier. The trap is silent: it looks perfect in the app.
+    var isExporting: Bool = false
     @Environment(\.guidanceColors) private var guidanceColors
 
     var body: some View {
@@ -36,7 +48,7 @@ struct TherapyInsightsSection: View {
         VStack(alignment: .leading, spacing: 12, content: content)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18)
-            .loopTileGlass()
+            .loopExportableTileBackground(isExporting)
     }
 
     private func tileTitle(_ text: String) -> some View {
@@ -59,6 +71,7 @@ struct TherapyInsightsSection: View {
             Text("This page looks for patterns in your own recorded data and reports them. It cannot and does not adjust anything, and it is not medical advice. Insulin settings are a clinical decision — bring anything here to your care team rather than acting on it directly.", comment: "Therapy insights disclaimer body")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -76,6 +89,9 @@ struct TherapyInsightsSection: View {
                             insights.cleanNightCount))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    // ⚠️ See the note on `explanation` below — without this the
+                    // exported card cuts this sentence off mid-word.
+                    .fixedSize(horizontal: false, vertical: true)
 
                 ForEach(insights.basalWindows) { window in
                     VStack(alignment: .leading, spacing: 4) {
@@ -106,6 +122,7 @@ struct TherapyInsightsSection: View {
                 Text("A fasting window that holds within about 30 mg/dL is usually taken as basal being about right for that stretch.", comment: "Basal 30 mg/dL rule")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -147,6 +164,7 @@ struct TherapyInsightsSection: View {
                             sensitivity.evidence.samples))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 let have = insights.sensitivity?.evidence.samples ?? 0
                 notEnoughData(String(format: NSLocalizedString("Needs at least %1$d isolated corrections — a bolus with no carbs near it, from a high starting point. So far: %2$d.", comment: "ISF insufficient"),
@@ -176,6 +194,7 @@ struct TherapyInsightsSection: View {
                             ratio.evidence.samples, ratio.daysSpanned))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 let ratio = insights.carbRatio
                 notEnoughData(String(format: NSLocalizedString("Needs at least %1$d clean bolused meals spread over at least %2$d days. So far: %3$d meals over %4$d days.", comment: "Carb ratio insufficient"),
@@ -272,7 +291,10 @@ struct TherapyInsightsSection: View {
     private func methodLine(_ label: String, _ body: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.subheadline.weight(.medium))
-            Text(body).font(.caption).foregroundStyle(.secondary)
+            Text(body)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.bottom, 2)
     }

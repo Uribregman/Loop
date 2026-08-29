@@ -53,7 +53,6 @@ enum StatsShareRenderer {
     static func image(of section: StatsReportModel.SectionID,
                       viewModel: HistoryStatisticsViewModel) -> URL? {
         let card = HistoryStatisticsView(exporting: section, viewModel: viewModel)
-            .frame(width: cardWidth)
             // ⚠️ FORCED LIGHT. A PNG has no dark mode: it cannot adapt to the
             // reader's device, and a dark card dropped into a light conversation
             // reads as a rendering fault. Light also prints, which is where these
@@ -62,6 +61,14 @@ enum StatsShareRenderer {
             .environment(\.colorScheme, .light)
 
         let renderer = ImageRenderer(content: card)
+        // ⚠️ `proposedSize`, NOT `.frame(width:)`. A hard frame pins the width but
+        // still lets SwiftUI lay the content out against an ideal HEIGHT, and
+        // multi-line `Text` then truncates: the Settings Review card came out
+        // with its explanations cut off mid-sentence ("…is dropped rather…"),
+        // which on a card whose entire job is to carry the caveats with the
+        // numbers is not a cosmetic problem. Proposing a width with an
+        // unconstrained height lets every paragraph take the lines it needs.
+        renderer.proposedSize = ProposedViewSize(width: cardWidth, height: nil)
         renderer.scale = cardScale
         renderer.isOpaque = true
         guard let image = renderer.uiImage, let data = image.pngData() else { return nil }

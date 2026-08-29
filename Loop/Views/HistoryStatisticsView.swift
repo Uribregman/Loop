@@ -741,9 +741,12 @@ struct HistoryStatisticsView: View {
             // not move because someone tapped "7d".
             HStack(alignment: .firstTextBaseline) {
                 sectionHeader(NSLocalizedString("Settings Review", comment: "Section header"), share: .review)
-                allHistoryBadge
+                // Not in an export: the card's own subtitle already says "All
+                // recorded history", and with the header suppressed the badge was
+                // left floating on its own under the title.
+                if !isExporting { allHistoryBadge }
             }
-            TherapyInsightsSection(insights: viewModel.insights)
+            TherapyInsightsSection(insights: viewModel.insights, isExporting: isExporting)
             shareButton
         })
     }
