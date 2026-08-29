@@ -108,6 +108,20 @@ final class HistoryLogStore {
         queue.sync { resolved.location }
     }
 
+    /// The directory the log is being written to, if there is a usable one.
+    ///
+    /// Exposed for the live statistics report, which writes ALONGSIDE the log:
+    /// same folder, so a user who has already shared or bookmarked their Loop
+    /// folder finds the report there without a second piece of setup.
+    ///
+    /// ⚠️ WRITERS OTHER THAN THIS STORE MUST NOT TOUCH `loop-history-*.jsonl`.
+    /// This handing out of the directory is a convenience for placing a file
+    /// next to the log — never a licence to write into the log itself, which has
+    /// exactly one owner and one serial queue.
+    var directory: URL? {
+        queue.sync { resolved.directory }
+    }
+
     /// One month's log file, as the export screen needs it.
     struct LogFile: Identifiable, Equatable {
         let url: URL

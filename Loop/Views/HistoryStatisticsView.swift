@@ -178,7 +178,13 @@ final class HistoryStatisticsViewModel: ObservableObject {
     }
 
     /// The actual work, with no reference to `self` so it can run anywhere.
-    private nonisolated static func statistics(
+    ///
+    /// ⚠️ INTERNAL, NOT PRIVATE, because `StatsLiveReport` runs the same
+    /// computation with no view model in sight. It must be THIS function and not
+    /// a copy: the whole-calendar-days rule below is subtle, was a bug once, and
+    /// a second implementation of it would drift silently — the live report would
+    /// then disagree with the screen it claims to mirror.
+    nonisolated static func statistics(
         for lines: [HistoryLine],
         days: Int?,
         scheduledBasalPerDay: Double?
@@ -347,6 +353,10 @@ struct HistoryStatisticsView: View {
     /// place of that section's share icon.
     @State private var preparingSection: StatsReportModel.SectionID?
     @State private var isPreparingFullReport = false
+    /// The self-rewriting copy in iCloud Drive. Observed rather than read once,
+    /// so the "last written" line updates as it works.
+    @ObservedObject private var liveReport = StatsLiveReport.shared
+
     /// Set when a share is ready; presenting the sheet is the only thing that
     /// clears it.
     @State private var sharePayload: StatsSharePayload?
@@ -600,7 +610,16 @@ struct HistoryStatisticsView: View {
                 }
             }
         }
-        .onAppear { viewModel.load() }
+        .onAppear {
+            viewModel.load()
+            // Cheap, and it is the only place these three are known. Persisted so
+            // a refresh that happens before anyone opens this screen can still
+            // print "currently set to" in the settings review.
+            StatsLiveReport.shared.rememberSettings(currentISF: viewModel.currentISF,
+                                                    currentCarbRatio: viewModel.currentCarbRatio,
+                                                    scheduledBasalPerDay: viewModel.scheduledBasalPerDay)
+            StatsLiveReport.shared.refresh()
+        }
         // Reload when the app comes back to the foreground. Without this the
         // pill and the whole keep-the-old-data path would be dead code: `load()`
         // otherwise runs once on appear and never again, and changing the period
@@ -2508,8 +2527,81 @@ struct HistoryStatisticsView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PillActionButtonStyle(.secondary))
+
+                liveReportBlock
             }
             .padding(.top, 4)
+        }
+    }
+
+    /// The self-updating copy.
+    ///
+    /// ⚠️ THE COPY HERE IS DELIBERATELY UNGLAMOROUS about what this does. It is
+    /// not hosting, there is no link that stays fresh on its own, and it stops
+    /// updating the moment the phone does. Every one of those is a way a reader
+    /// could be misled into trusting an old number, so each is stated rather than
+    /// left for them to discover.
+    private var liveReportBlock: some View {
+        tile {
+            Toggle(isOn: $liveReport.isEnabled) {
+                Text("Keep A Live Copy", comment: "Live report toggle")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .disabled(!HistoryLogStore.shared.isEnabled)
+
+            Text("Loop rewrites one file — “\(StatsLiveReport.fileName)” — in the same folder as your history log. Share that file once and it keeps showing current numbers instead of the day you sent it.",
+                 comment: "Live report explanation")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if !HistoryLogStore.shared.isEnabled {
+                Label(NSLocalizedString("Turn on the history log first — that is what decides where the file goes.", comment: "Live report needs the log"),
+                      systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if liveReport.isEnabled {
+                if let error = liveReport.lastError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if let written = liveReport.lastWritten {
+                    statRow(NSLocalizedString("Last written", comment: "Stat"),
+                            Self.exportStampFormatter.string(from: written))
+                }
+                if !liveReport.isInICloud {
+                    // Saying this plainly beats letting someone wonder why the
+                    // file never appears on their other device.
+                    Label(NSLocalizedString("Saved inside Loop rather than iCloud Drive, so it can only be shared from this phone.", comment: "Live report is local"),
+                          systemImage: "iphone")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("It updates when Loop opens, when you open this screen, and about every 15 minutes while Loop is running. It does not update while your phone is asleep — the page says so itself, next to the time it was written.",
+                     comment: "Live report update cadence")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                Button {
+                    liveReport.refresh(force: true)
+                } label: {
+                    Label(liveReport.isRefreshing
+                          ? NSLocalizedString("Updating…", comment: "Live report is refreshing")
+                          : NSLocalizedString("Update Now", comment: "Force a live report refresh"),
+                          systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillActionButtonStyle(.secondary))
+                .disabled(liveReport.isRefreshing)
+
+                if let url = liveReport.fileURL, liveReport.lastWritten != nil {
+                    ShareLink(item: url) {
+                        Label(NSLocalizedString("Send The Live File", comment: "Share the live report file"),
+                              systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PillActionButtonStyle(.secondary))
+                }
+            }
         }
     }
 

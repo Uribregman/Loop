@@ -49,7 +49,14 @@ final class StatusTableViewController: LoopChartsTableViewController {
     override func viewDidLoad() {
 
         super.viewDidLoad()
-        
+
+        // Statistics only, and nothing but a file write: this starts the
+        // self-updating HTML report if the user has turned it on. Placed here
+        // rather than in the launch sequence on purpose — reorganising this
+        // fork's startup path is what cost it CGM readings once already (STEP
+        // BB), and a report file has no business near that.
+        StatsLiveReport.shared.start()
+
         setupToolbarItems()
 
         tableView.register(BolusProgressTableViewCell.nib(), forCellReuseIdentifier: BolusProgressTableViewCell.className)

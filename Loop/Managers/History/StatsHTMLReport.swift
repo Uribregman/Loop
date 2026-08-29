@@ -30,11 +30,25 @@ enum StatsHTMLReport {
     /// - Parameter models: one model per period, in picker order. ALL of them are
     ///   embedded — the filter switches between panels that are already in the
     ///   file, so the exported page works with no network and no recomputation.
+    /// How a live copy announces itself.
+    ///
+    /// ⚠️ THE STALENESS LINE IS NOT OPTIONAL. A file that rewrites itself looks
+    /// current whether or not it is — if the phone has been off, or iCloud has
+    /// not synced, the reader is looking at old numbers in a page that gives
+    /// every impression of being live. So a live copy says, in the header, when
+    /// it was last written and that it only updates while Loop is running.
+    struct LiveInfo {
+        /// Seconds between automatic reloads in an open browser tab. Nil to leave
+        /// the page static.
+        var reloadSeconds: Int?
+    }
+
     static func full(models: [(id: String, title: String, longTitle: String, model: StatsReportModel)],
                      weeklyComparison: [HistoryStatistics.PeriodPoint],
                      monthlyComparison: [HistoryStatistics.PeriodPoint],
                      selected: String,
-                     generated: Date) -> String {
+                     generated: Date,
+                     live: LiveInfo? = nil) -> String {
 
         var panels = ""
         for entry in models {
@@ -60,7 +74,8 @@ enum StatsHTMLReport {
         let body = """
         \(headerHTML(title: NSLocalizedString("Loop Statistics", comment: "Report title"),
                      subtitle: models.first(where: { $0.id == selected })?.model.rangeText,
-                     generated: generated))
+                     generated: generated,
+                     live: live))
         <nav class="chips" aria-label="\(escape(NSLocalizedString("Time period", comment: "Filter label")))">
           <span class="chips-label">\(escape(NSLocalizedString("Period", comment: "Filter label")))</span>
           \(chips)
@@ -73,7 +88,19 @@ enum StatsHTMLReport {
 
         return document(title: NSLocalizedString("Loop Statistics", comment: "Report title"),
                         body: body,
-                        script: periodScript(models.map { (id: $0.id, scope: $0.longTitle, range: $0.model.rangeText ?? "") }))
+                        script: periodScript(models.map { (id: $0.id, scope: $0.longTitle, range: $0.model.rangeText ?? "") })
+                            + (live?.reloadSeconds.map(reloadScript) ?? ""))
+    }
+
+    /// Reload an open tab so a live copy does not sit there showing yesterday.
+    ///
+    /// Plain `location.reload()` on a timer, nothing cleverer: there is no server
+    /// to poll and no version to compare against. If the file on disk has not
+    /// changed, the reload is a no-op the browser serves from cache.
+    private static func reloadScript(_ seconds: Int) -> String {
+        """
+        (function () { setTimeout(function () { location.reload(); }, \(max(60, seconds)) * 1000); })();
+        """
     }
 
     /// One chapter, fixed at the period the exporter was looking at.
@@ -457,13 +484,19 @@ enum StatsHTMLReport {
 
     // MARK: - Document shell
 
-    private static func headerHTML(title: String, subtitle: String?, generated: Date) -> String {
-        """
+    private static func headerHTML(title: String, subtitle: String?, generated: Date,
+                                   live: LiveInfo? = nil) -> String {
+        let stamp = live == nil
+            ? String(format: NSLocalizedString("Exported %@ from Loop.", comment: "Export stamp"),
+                     timestampFormatter.string(from: generated))
+            : String(format: NSLocalizedString("Live copy — last written %@.", comment: "Live stamp"),
+                     timestampFormatter.string(from: generated))
+        return """
         <header>
           <h1>\(escape(title))</h1>
           \(subtitle.map { "<p class=\"range\">\(escape($0))</p>" } ?? "")
-          <p class="generated">\(escape(String(format: NSLocalizedString("Exported %@ from Loop.", comment: "Export stamp"),
-                                               timestampFormatter.string(from: generated))))</p>
+          <p class="generated">\(escape(stamp))</p>
+          \(live == nil ? "" : "<p class=\"generated warn\">\(escape(NSLocalizedString("This page is rewritten by Loop on the patient's phone. It only updates while that phone is running Loop and connected to iCloud — if the time above is old, so are the numbers.", comment: "Live staleness warning")))</p>")
         </header>
         """
     }
@@ -521,6 +554,7 @@ enum StatsHTMLReport {
     h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: -0.02em; }
     .range { margin: 0; color: var(--dim); }
     .generated { margin: 2px 0 0; color: var(--faint); font-size: 13px; }
+    .generated.warn { max-width: 60ch; margin-top: 6px; }
     .section-title {
       font-size: 21px; margin: 30px 0 10px; letter-spacing: -0.01em;
       display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;

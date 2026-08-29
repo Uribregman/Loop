@@ -637,6 +637,7 @@
 		ECBC485A9A2A9EEBB305893B /* SleepWindowProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A64F2182DB4623EA5838D7 /* SleepWindowProvider.swift */; };
 		EDB84422838C2890E9591717 /* FavoriteMealStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A994D4F8B984ACA53098A7C /* FavoriteMealStore.swift */; };
 		F44D4CCB84197DA2A30505C2 /* HistoryStatisticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA87401FAA0A00255D88A625 /* HistoryStatisticsView.swift */; };
+		C00EF87A0749485A994E76A4 /* StatsLiveReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F497822CAC1E4E3991295867 /* StatsLiveReport.swift */; };
 		46DB05F7412C4FEFB8D3896A /* StatsShareExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00002A0F3D2648E2B53D52FA /* StatsShareExport.swift */; };
 		E95FD64E14AD488AB6CB9CC4 /* StatsHTMLReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADC85E345564E45A688CD7B /* StatsHTMLReport.swift */; };
 		0972B8DE434B407CBC7FB41C /* StatsReportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A190569D34154A91B352E017 /* StatsReportModel.swift */; };
@@ -1517,6 +1518,7 @@
 		F5E0BDDA27E1D71F0033557E /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/Localizable.strings; sourceTree = "<group>"; };
 		F5E0BDE327E1D7230033557E /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/Localizable.strings; sourceTree = "<group>"; };
 		FA87401FAA0A00255D88A625 /* HistoryStatisticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HistoryStatisticsView.swift; path = Loop/Views/HistoryStatisticsView.swift; sourceTree = SOURCE_ROOT; };
+		F497822CAC1E4E3991295867 /* StatsLiveReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsLiveReport.swift; path = Loop/Managers/History/StatsLiveReport.swift; sourceTree = SOURCE_ROOT; };
 		00002A0F3D2648E2B53D52FA /* StatsShareExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsShareExport.swift; path = Loop/Views/StatsShareExport.swift; sourceTree = SOURCE_ROOT; };
 		BADC85E345564E45A688CD7B /* StatsHTMLReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsHTMLReport.swift; path = Loop/Managers/History/StatsHTMLReport.swift; sourceTree = SOURCE_ROOT; };
 		A190569D34154A91B352E017 /* StatsReportModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsReportModel.swift; path = Loop/Managers/History/StatsReportModel.swift; sourceTree = SOURCE_ROOT; };
@@ -1836,6 +1838,7 @@
 				0E52413BB66F3FBBBB255625 /* HistoryLogReader.swift */,
 				E63A4FC5ACECE5CC4005DD83 /* HistoryStatistics.swift */,
 				FA87401FAA0A00255D88A625 /* HistoryStatisticsView.swift */,
+				F497822CAC1E4E3991295867 /* StatsLiveReport.swift */,
 				00002A0F3D2648E2B53D52FA /* StatsShareExport.swift */,
 				BADC85E345564E45A688CD7B /* StatsHTMLReport.swift */,
 				A190569D34154A91B352E017 /* StatsReportModel.swift */,
@@ -3844,6 +3847,7 @@
 				69B140B0B628139EFECFEA6F /* HistoryLogReader.swift in Sources */,
 				6D264FF89B32D06789AEE1C5 /* HistoryStatistics.swift in Sources */,
 				F44D4CCB84197DA2A30505C2 /* HistoryStatisticsView.swift in Sources */,
+				C00EF87A0749485A994E76A4 /* StatsLiveReport.swift in Sources */,
 				46DB05F7412C4FEFB8D3896A /* StatsShareExport.swift in Sources */,
 				E95FD64E14AD488AB6CB9CC4 /* StatsHTMLReport.swift in Sources */,
 				0972B8DE434B407CBC7FB41C /* StatsReportModel.swift in Sources */,
