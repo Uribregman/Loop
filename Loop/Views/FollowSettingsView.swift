@@ -69,9 +69,18 @@ struct FollowSettingsView: View {
         .sheet(isPresented: Binding(get: { shareToPresent != nil },
                                     set: { if !$0 { shareToPresent = nil } })) {
             if let share = shareToPresent, let container = containerForShare {
-                CloudSharingView(share: share, container: container) {
-                    Task { await manager.refreshStatus() }
-                }
+                CloudSharingView(share: share, container: container,
+                                 onFailure: { message in
+                                     // Surfaced through the same alert as every
+                                     // other failure on this screen, so there is
+                                     // exactly one place an invite can go wrong
+                                     // and stay quiet about it: nowhere.
+                                     shareToPresent = nil
+                                     errorMessage = message
+                                 },
+                                 onDismiss: {
+                                     Task { await manager.refreshStatus() }
+                                 })
                 .ignoresSafeArea()
             }
         }
@@ -329,6 +338,7 @@ struct FollowSettingsView: View {
 struct CloudSharingView: UIViewControllerRepresentable {
     let share: CKShare
     let container: CKContainer
+    let onFailure: (String) -> Void
     let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> UICloudSharingController {
@@ -341,11 +351,17 @@ struct CloudSharingView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onDismiss: onDismiss) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFailure: onFailure, onDismiss: onDismiss)
+    }
 
     final class Coordinator: NSObject, UICloudSharingControllerDelegate {
+        private let onFailure: (String) -> Void
         private let onDismiss: () -> Void
-        init(onDismiss: @escaping () -> Void) { self.onDismiss = onDismiss }
+        init(onFailure: @escaping (String) -> Void, onDismiss: @escaping () -> Void) {
+            self.onFailure = onFailure
+            self.onDismiss = onDismiss
+        }
 
         func itemTitle(for csc: UICloudSharingController) -> String? {
             // Deliberately not the patient's name — this string shows up in share
@@ -353,9 +369,47 @@ struct CloudSharingView: UIViewControllerRepresentable {
             NSLocalizedString("Loop Follower Feed", comment: "Share sheet item title")
         }
 
+        /// 🐛 THIS USED TO CALL `onDismiss()` AND NOTHING ELSE — the invite sheet
+        /// simply closed and the screen went back to how it was. Every reason an
+        /// invite can fail (no iCloud account on the device, iCloud Drive off,
+        /// the container not enabled on this App ID, no network) landed here and
+        /// produced the same silent nothing, which is indistinguishable from the
+        /// button not working. "It doesn't share a link" is exactly what that
+        /// looks like from the outside.
+        ///
+        /// ⚠️ Never swallow this again. A pairing flow that fails quietly is a
+        /// pairing flow nobody can debug — not the user, and not us.
         func cloudSharingController(_ csc: UICloudSharingController,
                                     failedToSaveShareWithError error: Error) {
-            onDismiss()
+            onFailure(Self.explain(error))
+        }
+
+        /// CloudKit's own messages are accurate and useless ("Couldn't Save
+        /// Record"). The common causes each have a specific thing the user has to
+        /// go and do, so say that instead.
+        private static func explain(_ error: Error) -> String {
+            let fallback = error.localizedDescription
+            guard let ckError = error as? CKError else { return fallback }
+            switch ckError.code {
+            case .notAuthenticated:
+                return NSLocalizedString("This iPhone is not signed in to iCloud. Sign in under Settings → your name → iCloud, then try again.",
+                                         comment: "Share failure: not signed in")
+            case .networkUnavailable, .networkFailure:
+                return NSLocalizedString("No connection to iCloud right now. The invite needs the network once, to create the link.",
+                                         comment: "Share failure: offline")
+            case .quotaExceeded:
+                return NSLocalizedString("This iCloud account is out of storage, so the shared feed cannot be created.",
+                                         comment: "Share failure: quota")
+            case .permissionFailure, .badContainer, .missingEntitlement:
+                return NSLocalizedString("This build cannot reach its iCloud container. The Follow feature needs the iCloud capability on the app's App ID, which a free Apple ID cannot grant.",
+                                         comment: "Share failure: entitlement")
+            case .managedAccountRestricted:
+                return NSLocalizedString("This Apple Account is managed and is not allowed to share iCloud data.",
+                                         comment: "Share failure: managed account")
+            default:
+                return String(format: NSLocalizedString("iCloud refused to create the invite: %@", comment: "Share failure: other"),
+                              fallback)
+            }
         }
 
         func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {

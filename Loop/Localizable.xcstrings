@@ -6744,7 +6744,7 @@
       "comment" : "Badge\nBadge on tiles that ignore the period picker"
     },
     "All recorded history" : {
-      "comment" : "Export scope"
+      "comment" : "Export scope\nPanel heading for all data"
     },
     "Amount Consumed" : {
       "comment" : "Label for carb quantity entry row on carb entry screen",
@@ -18852,6 +18852,9 @@
     "Every line starts with the same three fields: v (format version), t (the kind of event) and at (when it happened, including your time zone)." : {
       "comment" : "History format shared fields"
     },
+    "Every time period is shown below, one after another. Open this file in a web browser to switch between them instead." : {
+      "comment" : "No-script explanation"
+    },
     "Everything below covers the last %@" : {
       "comment" : "Scope caption (1: period)"
     },
@@ -24464,7 +24467,7 @@
       }
     },
     "Last %@" : {
-      "comment" : "Export scope"
+      "comment" : "Export scope\nPanel heading"
     },
     "Last sent" : {
       "comment" : "Publish status row"
