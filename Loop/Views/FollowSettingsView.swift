@@ -25,6 +25,12 @@ struct FollowSettingsView: View {
     @State private var errorMessage: String?
     @State private var pendingRevoke: FollowerConnection?
 
+    /// The label being edited, held here only while its alert is up. Safe as
+    /// `@State` precisely because an alert is not torn down by the parent's
+    /// republishing — see the note on `labelSection`.
+    @State private var isEditingLabel = false
+    @State private var labelDraft = ""
+
     /// The master switch from §15.2 rule 4. Mirrored into `@State` so the toggle
     /// animates; `HistoryLogger` remains the source of truth.
     @State private var isFeedEnabled = HistoryLogger.shared.isFollowerFeedEnabled
@@ -136,14 +142,46 @@ struct FollowSettingsView: View {
     /// says about them. Blank is a valid answer.
     ///
     /// Held on the manager, not in `@State` — same reason as the invite draft.
+    /// 🐛 SAME DISEASE AS THE FOLLOWER NAME FIELD, AND THE EVIDENCE WAS SITTING
+    /// IN THE UI: this field contained a lone "H" — the first letter of a name
+    /// somebody typed before the parent list republished and took the keyboard
+    /// away. An inline `TextField` on this screen cannot hold focus, because the
+    /// Settings list re-initialises this view every loop cycle.
+    ///
+    /// So it is a row that opens an alert, like the invite. Tapping it is one
+    /// extra step; being able to type more than one character is worth it.
     private var labelSection: some View {
         Section {
-            TextField(NSLocalizedString("e.g. Uri's Loop", comment: "Patient display label placeholder"),
-                      text: Binding(
-                        get: { manager.patientLabel },
-                        set: { manager.patientLabel = $0 }
-                      ))
-                .textInputAutocapitalization(.words)
+            Button {
+                labelDraft = manager.patientLabel
+                isEditingLabel = true
+            } label: {
+                HStack {
+                    Text(manager.patientLabel.isEmpty
+                         ? NSLocalizedString("e.g. Uri's Loop", comment: "Patient display label placeholder")
+                         : manager.patientLabel)
+                        .foregroundStyle(manager.patientLabel.isEmpty ? .secondary : .primary)
+                    Spacer()
+                    Image(systemName: "pencil")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .alert(Text("What they'll see", comment: "Patient label alert title"),
+                   isPresented: $isEditingLabel) {
+                TextField(NSLocalizedString("e.g. Uri's Loop", comment: "Patient display label placeholder"),
+                          text: $labelDraft)
+                    .textInputAutocapitalization(.words)
+                Button("Cancel", role: .cancel) { }
+                Button(NSLocalizedString("Save", comment: "Save the patient label")) {
+                    manager.patientLabel = labelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            } message: {
+                Text("Shown at the top of your followers' screens. Leave it blank and they'll just see \"Loop\".",
+                     comment: "Patient label alert message")
+            }
         } header: {
             Text("What they'll see", comment: "Patient label section header")
         } footer: {
@@ -266,27 +304,48 @@ struct FollowSettingsView: View {
         }
     }
 
+    /// 🐛 THE NAME FIELD USED TO LIVE IN THIS SECTION, AND IT COULD NOT BE TYPED
+    /// INTO AT ALL. This screen is a `NavigationLink` destination inside the
+    /// Settings list, and that list republishes constantly — every loop cycle,
+    /// every device update. SwiftUI re-initialises the destination each time, so
+    /// the inline `TextField` was destroyed and rebuilt within a second of being
+    /// tapped: FOCUS CANNOT SURVIVE THAT, however carefully the value is stored.
+    ///
+    /// The draft was already moved onto the singleton so the VALUE survived (see
+    /// `draftName`), and that fix was real but incomplete — a field that keeps
+    /// its text and loses the keyboard is still a field you cannot type in. The
+    /// symptom was "Create Invitation" staying greyed out forever and the button
+    /// doing nothing, because the name never got past one character. The
+    /// patient-label field above shows the same fingerprint: a lone "H".
+    ///
+    /// ⚠️ AN ALERT, NOT AN INLINE ROW, AND THAT IS THE FIX. A presented alert is
+    /// not re-initialised when the parent list republishes, so its text field
+    /// keeps focus. Do not move this back inline to tidy the layout up.
     private var addSection: some View {
         Section(footer: footerText) {
-            if manager.isNamingFollower {
+            Button {
+                manager.isNamingFollower = true
+            } label: {
+                Label(NSLocalizedString("Add Follower", comment: "Add follower button"),
+                      systemImage: "person.badge.plus")
+            }
+            .disabled(!manager.canAddFollower || manager.isBusy)
+            // ⚠️ ATTACHED HERE, NOT TO THE LIST, AND THAT IS NOT A STYLE CHOICE.
+            // The list already carries two `.alert` modifiers (revoke, and the
+            // failure alert). SwiftUI honours ONE alert per view: a third simply
+            // never presents, silently — tapping Add Follower did nothing at all,
+            // which is the same symptom this whole fix set out to remove. Hanging
+            // it off the button gives it its own view to be presented from.
+            .alert(Text("Invite a follower", comment: "Naming alert title"),
+                   isPresented: $manager.isNamingFollower) {
                 TextField(NSLocalizedString("Their name, e.g. Mum", comment: "Follower name field placeholder"),
                           text: $manager.draftName)
                     .textInputAutocapitalization(.words)
-                    .submitLabel(.done)
-                HStack {
-                    Button("Cancel") { manager.clearDraft() }
-                    Spacer()
-                    Button("Create Invitation") { invite() }
-                        .disabled(trimmedDraftName.isEmpty || manager.isBusy)
-                }
-            } else {
-                Button {
-                    manager.isNamingFollower = true
-                } label: {
-                    Label(NSLocalizedString("Add Follower", comment: "Add follower button"),
-                          systemImage: "person.badge.plus")
-                }
-                .disabled(!manager.canAddFollower)
+                Button("Cancel", role: .cancel) { manager.clearDraft() }
+                Button(NSLocalizedString("Create Invitation", comment: "Create invitation button")) { invite() }
+            } message: {
+                Text("Give them a name so you can tell your followers apart later. It is stored on this phone only and never sent to them.",
+                     comment: "Naming alert message")
             }
         }
     }
@@ -313,7 +372,10 @@ struct FollowSettingsView: View {
         // that message is only honest when the field is genuinely empty, and it
         // was the symptom of the draft being wiped out from under the user.
         guard !name.isEmpty else {
-            manager.isNamingFollower = true
+            // Reopening the alert in silence looks exactly like the bug this
+            // screen just had. Say what is missing.
+            errorMessage = NSLocalizedString("Give this follower a name first — it is how you tell them apart when you come back to revoke one.",
+                                             comment: "Empty follower name")
             return
         }
         Task {

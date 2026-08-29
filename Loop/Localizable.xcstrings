@@ -21876,6 +21876,9 @@
     "iCloud Drive isn't available, so history is being saved on this iPhone. Find it in the Files app, under On My iPhone. Export it regularly — it is not backed up anywhere else." : {
       "comment" : "Footer when the log is stored locally"
     },
+    "iCloud refused to create the invite: %@" : {
+      "comment" : "Share failure: other"
+    },
     "If iOS Focus Mode is ON and Mute Alerts is OFF, Critical Alerts will still be delivered and non-Critical Alerts will be silenced until %1$@ is added to each Focus mode as an Allowed App." : {
       "comment" : "Focus modes descriptive text (1: app name)",
       "localizations" : {
@@ -28523,6 +28526,9 @@
           }
         }
       }
+    },
+    "No connection to iCloud right now. The invite needs the network once, to create the link." : {
+      "comment" : "Share failure: offline"
     },
     "No folder to write to. Turn on the history log first." : {
       "comment" : "Live report has nowhere to write"
@@ -38568,6 +38574,12 @@
     "They will stop receiving your data. It can take a little while to take effect on their device." : {
       "comment" : "Revoke confirmation message"
     },
+    "This Apple Account is managed and is not allowed to share iCloud data." : {
+      "comment" : "Share failure: managed account"
+    },
+    "This build cannot reach its iCloud container. The Follow feature needs the iCloud capability on the app's App ID, which a free Apple ID cannot grant." : {
+      "comment" : "Share failure: entitlement"
+    },
     "This describes nights already recorded. It is not a target to aim for — that conversation belongs with your care team." : {
       "comment" : "Bedtime caveat"
     },
@@ -38576,6 +38588,12 @@
     },
     "This file is a record, not medical advice. It shows what happened; any decision about your settings belongs with your care team." : {
       "comment" : "History format caution"
+    },
+    "This iCloud account is out of storage, so the shared feed cannot be created." : {
+      "comment" : "Share failure: quota"
+    },
+    "This iPhone is not signed in to iCloud. Sign in under Settings → your name → iCloud, then try again." : {
+      "comment" : "Share failure: not signed in"
     },
     "This is the development version of Loop, built from the dev branch. Any updates on this branch may contain new, untested features, and may be unsafe. If you are not a tester, please do not use this branch, and switch to main." : {
       "comment" : "Body of the warning shown at launch on development builds"
