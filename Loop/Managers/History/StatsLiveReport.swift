@@ -14,9 +14,13 @@
 //  handing someone's medical data to a service.
 //
 //  So it updates:
-//    • when Loop comes to the foreground, at most once every 15 minutes, and
-//    • whenever the statistics screen is opened, and
-//    • immediately when the patient asks it to.
+//    • at most once every TWO HOURS, and only while the battery is above 40%,
+//    • the moment the battery climbs back above 40% if a refresh was skipped,
+//    • and immediately when the patient asks it to, whatever the battery says.
+//
+//  The battery floor exists because this is a background convenience running on
+//  the phone that drives an insulin pump. Nothing here is worth a percent of the
+//  charge that pump depends on, so below 40% it simply stops and says so.
 //
 //  It does NOT update while the phone is asleep in a drawer. That limitation is
 //  printed in the page itself, next to the timestamp — see `LiveInfo`. A page
@@ -49,9 +53,25 @@ final class StatsLiveReport: ObservableObject {
     static let fileName = "Loop Statistics.html"
 
     /// Floor between automatic refreshes. Each one runs the statistics pass six
-    /// times, so this is not free; fifteen minutes is well inside the useful
-    /// resolution of any of these numbers (CGM arrives every five).
-    static let minimumInterval: TimeInterval = 15 * 60
+    /// times, so this is not free.
+    static let minimumInterval: TimeInterval = 2 * 60 * 60
+
+    /// Below this the report does not refresh at all.
+    ///
+    /// ⚠️ THE POINT IS THE PUMP, NOT THE PHONE. This app keeps someone alive by
+    /// talking to an insulin pump over Bluetooth all day. A statistics file that
+    /// nobody is currently looking at does not get to spend the battery that
+    /// delivery depends on. 40% is where a phone stops being comfortably fine and
+    /// starts being something you think about.
+    static let batteryFloor: Float = 0.40
+
+    /// How often to look while Loop is in the foreground for a long stretch.
+    ///
+    /// `didBecomeActive` alone would mean a phone left open on the charger never
+    /// updated at all — the promise is "every two hours", so something has to
+    /// actually tick. `refresh()` throttles itself, so this is a cheap poll of a
+    /// timestamp, not a rebuild.
+    private static let pollInterval: TimeInterval = 20 * 60
 
     /// How often an already-open browser tab reloads itself.
     static let browserReloadSeconds = 600
@@ -84,7 +104,13 @@ final class StatsLiveReport: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
 
+    /// True when a refresh was due and the battery is what stopped it. Drives the
+    /// one line in the UI that explains why nothing is happening — a feature that
+    /// silently does nothing is indistinguishable from a broken one.
+    @Published private(set) var isWaitingForBattery = false
+
     private var hasStarted = false
+    private var pollTimer: Timer?
 
     private init() {
         isEnabled = UserDefaults.standard.bool(forKey: Self.enabledKey)
@@ -105,6 +131,11 @@ final class StatsLiveReport: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
 
+        // Required before `batteryLevel` returns anything but -1. Harmless and
+        // free — it is a property read, not a subscription to anything costly —
+        // and Loop already cares about the battery elsewhere.
+        UIDevice.current.isBatteryMonitoringEnabled = true
+
         NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
@@ -112,7 +143,42 @@ final class StatsLiveReport: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+
+        // The moment the charge comes back. iOS posts this about every 1%, so a
+        // phone put on a charger with a report waiting picks it up within a
+        // minute or two rather than at the next two-hour boundary.
+        NotificationCenter.default.addObserver(
+            forName: UIDevice.batteryLevelDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isWaitingForBattery, self.hasEnoughBattery else { return }
+                self.refresh()
+            }
+        }
+
+        pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
         refresh()
+    }
+
+    /// Whether there is enough charge to spend on this.
+    ///
+    /// ⚠️ UNKNOWN COUNTS AS ENOUGH. `batteryLevel` returns -1 when iOS will not
+    /// say — a simulator, or monitoring not yet up. Blocking a feature on a fact
+    /// the system refuses to provide would mean it silently never works on those
+    /// devices, which is a worse failure than spending a little charge.
+    var hasEnoughBattery: Bool {
+        let level = UIDevice.current.batteryLevel
+        guard level >= 0 else { return true }
+        // Plugged in is plugged in: the floor is about draining someone's phone,
+        // and a charging phone is not being drained.
+        if UIDevice.current.batteryState == .charging || UIDevice.current.batteryState == .full {
+            return true
+        }
+        return level > Self.batteryFloor
     }
 
     /// Remember the therapy settings the statistics screen was given, so a
@@ -176,6 +242,17 @@ final class StatsLiveReport: ObservableObject {
            FileManager.default.fileExists(atPath: url.path) {
             return
         }
+
+        // ⚠️ CHECKED AFTER THE INTERVAL, NOT BEFORE, AND THAT ORDER MATTERS.
+        // `isWaitingForBattery` must mean "a refresh is DUE and the battery is
+        // holding it up" — if it were set on every call it would be true all the
+        // time on a low phone, including the 119 minutes when nothing was due
+        // anyway, and the UI would blame the battery for a wait it did not cause.
+        guard force || hasEnoughBattery else {
+            isWaitingForBattery = true
+            return
+        }
+        isWaitingForBattery = false
 
         isRefreshing = true
         lastError = nil

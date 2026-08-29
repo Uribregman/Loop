@@ -2576,7 +2576,18 @@ struct HistoryStatisticsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Text("It updates when Loop opens, when you open this screen, and about every 15 minutes while Loop is running. It does not update while your phone is asleep — the page says so itself, next to the time it was written.",
+                if liveReport.isWaitingForBattery {
+                    // Named plainly. A feature that quietly does nothing is
+                    // indistinguishable from a broken one, and the reason here is
+                    // one the user can actually act on.
+                    Label(String(format: NSLocalizedString("Paused below %.0f%% battery — it will update as soon as you charge.", comment: "Live report is waiting for battery"),
+                                 StatsLiveReport.batteryFloor * 100),
+                          systemImage: "battery.25")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("It updates about every 2 hours while Loop is running, and only while your battery is above 40% — this phone is running your pump, and a statistics file does not get to spend that charge. It does not update while your phone is asleep; the page says so itself, next to the time it was written.",
                      comment: "Live report update cadence")
                     .font(.caption)
                     .foregroundStyle(.tertiary)

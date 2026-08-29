@@ -496,7 +496,7 @@ enum StatsHTMLReport {
           <h1>\(escape(title))</h1>
           \(subtitle.map { "<p class=\"range\">\(escape($0))</p>" } ?? "")
           <p class="generated">\(escape(stamp))</p>
-          \(live == nil ? "" : "<p class=\"generated warn\">\(escape(NSLocalizedString("This page is rewritten by Loop on the patient's phone. It only updates while that phone is running Loop and connected to iCloud — if the time above is old, so are the numbers.", comment: "Live staleness warning")))</p>")
+          \(live == nil ? "" : "<p class=\"generated warn\">\(escape(NSLocalizedString("This page is rewritten by Loop on the patient's phone, about every two hours while it is running and charged above 40%. It does not update while that phone is asleep or low on battery — if the time above is old, so are the numbers.", comment: "Live staleness warning")))</p>")
         </header>
         """
     }
