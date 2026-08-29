@@ -226,12 +226,24 @@ struct FollowSettingsView: View {
                 // maddening when you are testing.
                 FollowerPublisher.shared.publish(force: true)
             } label: {
-                Text("Send Now", comment: "Manual publish button")
+                HStack {
+                    Text(publisher.isPublishing
+                         ? NSLocalizedString("Sending…", comment: "Publish in progress")
+                         : NSLocalizedString("Send Now", comment: "Manual publish button"))
+                    if publisher.isPublishing {
+                        Spacer()
+                        ProgressView().controlSize(.small)
+                    }
+                }
             }
+            .disabled(publisher.isPublishing || !isFeedEnabled)
         } header: {
             Text("Sending", comment: "Publish status section header")
         } footer: {
-            Text("Your Loop sends an update after each loop cycle, at most once every few minutes. Nothing is sent while Share My Loop is off.",
+            // ⚠️ CONCRETE NUMBERS. "Every few minutes" left the honest question
+            // "so how long until they see this?" unanswerable, which is how a
+            // working feature still feels broken.
+            Text("Your Loop sends an update after a loop cycle, at most once every 4 minutes. Their app re-reads every 5 minutes while it is open, so an update normally appears within about 5 minutes and at worst about 9. Send Now and their own refresh both skip the wait. Nothing is sent while Share My Loop is off.",
                  comment: "Publish status footer")
         }
     }

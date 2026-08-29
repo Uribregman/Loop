@@ -412,6 +412,17 @@ final class FollowerPublisher: ObservableObject {
     @Published private(set) var lastPublishError: String?
     @Published private(set) var lastPayloadBytes: Int?
 
+    /// True while a publish is actually in flight.
+    ///
+    /// 🐛 WITHOUT THIS, "SEND NOW" LOOKED BROKEN. `publish()` returns
+    /// immediately by design — it must never block the caller, which can be a
+    /// device callback — so tapping the button changed NOTHING on screen. No
+    /// spinner, no disabled state, and "Last sent" only moves seconds later if
+    /// the round trip succeeds. A button that gives no sign it was pressed is
+    /// indistinguishable from a dead one, and that is exactly what it was
+    /// reported as.
+    @Published private(set) var isPublishing = false
+
     private let log = OSLog(category: "FollowerPublisher")
 
     /// Serialises publishing, and keeps every byte of it off the caller's queue.
@@ -444,8 +455,14 @@ final class FollowerPublisher: ObservableObject {
             Task { @MainActor in
                 if !force, let last = self.lastAttempt,
                    Date().timeIntervalSince(last) < self.minimumInterval { return }
+                // Guarded here rather than inside `performPublish`, so a
+                // rate-limited call never flashes the spinner for work it is
+                // about to skip.
+                guard !self.isPublishing else { return }
                 self.lastAttempt = Date()
+                self.isPublishing = true
                 await self.performPublish()
+                self.isPublishing = false
             }
         }
     }
