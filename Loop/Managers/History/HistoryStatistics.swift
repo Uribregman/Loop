@@ -468,6 +468,17 @@ struct HistoryStatistics {
     /// Three of each is the least that can be called a pattern rather than a
     /// coincidence — and on a 7-day period it means the split stays silent.
     static let minimumDaysPerWeekPart = 3
+    /// Which days are the weekend, as `Calendar` weekday numbers (1 = Sunday).
+    /// 6 = Friday, 7 = Saturday.
+    ///
+    /// ⚠️ DELIBERATELY FIXED, NOT `Calendar.isDateInWeekend`. That answers from
+    /// the device's Region setting, which is a setting about FORMATTING, not
+    /// about the user's week — a phone set to United States calls Sunday a
+    /// weekend day and Friday a working one, and the split then compares two
+    /// groups that mean nothing to the person reading it. This fork's user
+    /// keeps a Friday–Saturday weekend, so that is what the split uses,
+    /// regardless of what region the phone is set to.
+    static let weekendWeekdayNumbers: Set<Int> = [6, 7]
     /// Readings inside 00:00–06:00 before a night counts. 24 is two hours.
     static let minimumReadingsPerNight = 24
 
@@ -1039,16 +1050,25 @@ struct HistoryStatistics {
         for (day, counts) in usable {
             let fraction = Double(counts.inRange) / Double(counts.total)
             if fraction >= 0.7 { goalDays.insert(day) }
-            if calendar.isDateInWeekend(day) { weekend.append(fraction) } else { weekday.append(fraction) }
+            if Self.weekendWeekdayNumbers.contains(calendar.component(.weekday, from: day)) {
+                weekend.append(fraction)
+            } else {
+                weekday.append(fraction)
+            }
         }
         summary.meetingGoal = goalDays.count
         summary.weekdayCount = weekday.count
         summary.weekendCount = weekend.count
         // ⚠️ A FLOOR ON EACH SIDE, NOT JUST "not empty". With `!isEmpty` a single
         // weekend day became "your weekends", and any gap of 8 points then
-        // printed "weekends tend to go worse" as a finding. Which day counts as
-        // the weekend is the device's own calendar (`isDateInWeekend`), so this
-        // follows the user's region — Fri–Sat where that is the weekend.
+        // printed "weekends tend to go worse" as a finding. Which days count as
+        // the weekend is `weekendWeekdayNumbers` — Friday and Saturday, fixed,
+        // and NOT taken from the device region.
+        //
+        // ⚠️ `minimumDaysPerWeekPart` is 3, and a Fri–Sat weekend supplies only
+        // 2 weekend days per calendar week. So the split needs at least a
+        // fortnight of data: silent on 7 days, and on 14 days only if both
+        // weekends were worn.
         if weekday.count >= minimumDaysPerWeekPart {
             summary.weekdayInRange = weekday.reduce(0, +) / Double(weekday.count)
         }

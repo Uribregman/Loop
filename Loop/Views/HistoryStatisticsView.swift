@@ -1842,10 +1842,13 @@ struct HistoryStatisticsView: View {
                 Divider().opacity(0.4)
                 // The counts travel with the numbers: "70% at weekends" means
                 // something different over 3 weekend days than over 12.
-                statRow(NSLocalizedString("Weekdays", comment: "Stat"),
+                statRow(NSLocalizedString("Weekdays (Sun–Thu)", comment: "Stat"),
                         String(format: NSLocalizedString("%1$@ · %2$d days", comment: "Stat with day count"),
                                Self.percent(weekday), viewModel.stats.days.weekdayCount))
-                statRow(NSLocalizedString("Weekends", comment: "Stat"),
+                // The days are named in the label because the split is FIXED at
+                // Fri–Sat and no longer follows the device region — so the reader
+                // can see which days each number is actually made of.
+                statRow(NSLocalizedString("Weekends (Fri–Sat)", comment: "Stat"),
                         String(format: NSLocalizedString("%1$@ · %2$d days", comment: "Stat with day count"),
                                Self.percent(weekend), viewModel.stats.days.weekendCount))
             }
