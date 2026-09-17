@@ -13,6 +13,7 @@
 import Foundation
 import AVFoundation
 import AudioToolbox
+import CallKit
 import LoopKit
 
 /// Provides the bundled .caf sound files to `AlertManager`, which copies them
@@ -55,6 +56,24 @@ final class AlertAudioPlayer: NSObject, AVAudioPlayerDelegate {
 
     private var player: AVAudioPlayer?
 
+    /// Sees cellular and CallKit (WhatsApp, FaceTime…) calls. Needs no permission.
+    private let callObserver = CXCallObserver()
+
+    /// Player volume for an alarm that would otherwise play into the user's ear
+    /// during a call. The `.playback` session follows the call's route, so at 1.0
+    /// the tone came out of the earpiece at full media level.
+    static let inCallEarVolume: Float = 0.15
+
+    private var isOnCall: Bool {
+        callObserver.calls.contains { !$0.hasEnded }
+    }
+
+    /// Anything other than the loudspeaker or a car counts as "at the ear", so an
+    /// unrecognised route errs towards quiet rather than loud.
+    private static func isRoutedToLoudspeaker(_ route: AVAudioSessionRouteDescription) -> Bool {
+        route.outputs.contains { $0.portType == .builtInSpeaker || $0.portType == .carAudio }
+    }
+
     /// Play `alert`'s sound. No-op for alerts from other managers.
     func play(_ alert: Alert) {
         guard Self.isCustomLoopAlert(managerIdentifier: alert.identifier.managerIdentifier) else { return }
@@ -76,13 +95,21 @@ final class AlertAudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     private func play(url: URL) {
+        let session = AVAudioSession.sharedInstance()
+        let onCall = isOnCall
         do {
             // `.playback` is what sounds through the ringer switch.
-            // `.duckOthers` lowers music rather than stopping it.
-            try AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
-            try AVAudioSession.sharedInstance().setActive(true)
+            // `.duckOthers` lowers music rather than stopping it — but during a call
+            // the "other audio" is the caller's voice, so mix instead.
+            try session.setCategory(.playback, options: onCall ? [.mixWithOthers] : [.duckOthers])
+            try session.setActive(true)
             let player = try AVAudioPlayer(contentsOf: url)
             player.delegate = self
+            if onCall && !Self.isRoutedToLoudspeaker(session.currentRoute) {
+                // Quiet in the ear, plus a vibration so the alarm is still felt.
+                player.volume = Self.inCallEarVolume
+                vibrate()
+            }
             self.player = player
             player.play()
         } catch {
