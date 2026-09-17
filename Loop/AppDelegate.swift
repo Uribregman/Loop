@@ -10,9 +10,10 @@ import UIKit
 import LoopKit
 
 final class AppDelegate: UIResponder, UIApplicationDelegate, WindowProvider {
+    /// The scene's window, handed over by `SceneDelegate` when the scene connects.
     var window: UIWindow?
 
-    private let loopAppManager = LoopAppManager()
+    let loopAppManager = LoopAppManager()
     private let log = DiagnosticLog(category: "AppDelegate")
 
     // MARK: - UIApplicationDelegate - Initialization
@@ -24,32 +25,21 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, WindowProvider {
 
         log.default("lastPathComponent = %{public}@", String(describing: Bundle.main.appStoreReceiptURL?.lastPathComponent))
 
+        // Managers start HERE, not when a scene connects: iOS relaunches Loop in the
+        // background for Bluetooth and push events without connecting any scene, and
+        // pump/CGM communication must not wait for the UI.
         loopAppManager.initialize(windowProvider: self, launchOptions: launchOptions)
         loopAppManager.launch()
-        return loopAppManager.isLaunchComplete
+        return true
+    }
+
+    // MARK: - UIApplicationDelegate - Scene Configuration
+
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
     }
 
     // MARK: - UIApplicationDelegate - Life Cycle
-
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        log.default(#function)
-
-        loopAppManager.didBecomeActive()
-    }
-
-    func applicationWillResignActive(_ application: UIApplication) {
-        log.default(#function)
-    }
-
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        log.default(#function)
-    }
-
-    func applicationWillEnterForeground(_ application: UIApplication) {
-        log.default(#function)
-        
-        loopAppManager.askUserToConfirmLoopReset()
-    }
 
     func applicationWillTerminate(_ application: UIApplication) {
         log.default(#function)
@@ -82,20 +72,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, WindowProvider {
         log.default(#function)
 
         completionHandler(loopAppManager.handleRemoteNotification(userInfo as? [String: AnyObject]) ? .noData : .failed)
-    }
-    
-    // MARK: - UIApplicationDelegate - Deeplinking
-    
-    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
-        loopAppManager.handle(url)
-    }
-
-    // MARK: - UIApplicationDelegate - Continuity
-
-    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
-        log.default(#function)
-
-        return loopAppManager.userActivity(userActivity, restorationHandler: restorationHandler)
     }
 
     // MARK: - UIApplicationDelegate - Interface

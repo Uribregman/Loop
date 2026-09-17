@@ -128,6 +128,20 @@ class LoopAppManager: NSObject {
         resumeLaunch()
     }
 
+    func windowDidBecomeAvailable() {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        windowProvider?.window?.tintColor = .loopAccent
+        // Only resume a launch that actually stopped for the window; onboarding that
+        // is already running must not be started a second time.
+        if isAwaitingWindow {
+            isAwaitingWindow = false
+            resumeLaunch()
+        }
+    }
+
+    private var isAwaitingWindow = false
+
     var isLaunchPending: Bool { state == .checkProtectedDataAvailable }
 
     var isLaunchComplete: Bool { state == .launchComplete }
@@ -138,6 +152,19 @@ class LoopAppManager: NSObject {
         }
         if state == .launchManagers {
             launchManagers()
+        }
+        // Onboarding and the home screen need a window, which only exists once the
+        // scene connects. A background launch may never connect one, so do the
+        // device work now and let `windowDidBecomeAvailable()` finish the rest.
+        guard windowProvider?.window != nil else {
+            if state == .launchOnboarding && !isAwaitingWindow {
+                log.default("No window yet; launching UI when the scene connects")
+                isAwaitingWindow = true
+                deviceDataManager.refreshDeviceData()
+                handleRemoteNotificationFromLaunchOptions()
+                launchOptions = nil
+            }
+            return
         }
         if state == .launchOnboarding {
             launchOnboarding()
@@ -233,8 +260,6 @@ class LoopAppManager: NSObject {
                                               windowProvider: windowProvider,
                                               userDefaults: UserDefaults.appGroup!)
 
-        deeplinkManager = DeeplinkManager(rootViewController: rootViewController)
-
         for support in supportManager.availableSupports {
             if let analyticsService = support as? AnalyticsService {
                 analyticsServicesManager.addService(analyticsService)
@@ -306,6 +331,8 @@ class LoopAppManager: NSObject {
 
         rootNavigationController?.setViewControllers([statusTableViewController], animated: true)
 
+        deeplinkManager = DeeplinkManager(rootViewController: rootViewController)
+
         deviceDataManager.refreshDeviceData()
 
         handleRemoteNotificationFromLaunchOptions()
@@ -360,7 +387,7 @@ class LoopAppManager: NSObject {
     // MARK: - Deeplinking
     
     func handle(_ url: URL) -> Bool {
-        deeplinkManager.handle(url)
+        deeplinkManager?.handle(url) ?? false
     }
 
     // MARK: - Continuity

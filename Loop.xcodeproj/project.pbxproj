@@ -10,6 +10,7 @@
 		05BF4FB48D056E3E4EA24655 /* TherapyInsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 954748A0B9DC523072C36688 /* TherapyInsightsView.swift */; };
 		080A40D1885DD4C38DA26BE5 /* MealSummaryCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5F4762AF28BD540CEC7CA0 /* MealSummaryCell.swift */; };
 		089F4E8E9E00D7FAEB9F8578 /* low_alert.caf in Resources */ = {isa = PBXBuildFile; fileRef = CB3642268C81487714033D7D /* low_alert.caf */; };
+		0972B8DE434B407CBC7FB41C /* StatsReportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A190569D34154A91B352E017 /* StatsReportModel.swift */; };
 		0AC843F69A943F084437C4C8 /* GlucoseRiskMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF484846B25AEE0EB4E520A2 /* GlucoseRiskMetrics.swift */; };
 		0FB44EEAA8C65A4AB43EA6DD /* CarbEstimationSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C5D45CC889056DE82851A03 /* CarbEstimationSettings.swift */; };
 		1419606428D9550400BA86E0 /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 437AFEE6203688CF008C4892 /* LoopKitUI.framework */; };
@@ -219,6 +220,7 @@
 		43FCEEAD221A66780013DD30 /* DateFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FCEEAC221A66780013DD30 /* DateFormatter.swift */; };
 		43FCEEB1221A863E0013DD30 /* StatusChartsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FCEEB0221A863E0013DD30 /* StatusChartsManager.swift */; };
 		45224C00ACC5E29ABEAC69E1 /* FollowSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B9846C38CFEAF004E81C45D /* FollowSettingsView.swift */; };
+		46DB05F7412C4FEFB8D3896A /* StatsShareExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00002A0F3D2648E2B53D52FA /* StatsShareExport.swift */; };
 		4F08DE8F1E7BB871006741EA /* CollectionType+Loop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F08DE8E1E7BB871006741EA /* CollectionType+Loop.swift */; };
 		4F11D3C020DCBEEC006E072C /* GlucoseBackfillRequestUserInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F11D3BF20DCBEEC006E072C /* GlucoseBackfillRequestUserInfo.swift */; };
 		4F11D3C220DD80B3006E072C /* WatchHistoricalGlucose.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F11D3C120DD80B3006E072C /* WatchHistoricalGlucose.swift */; };
@@ -284,6 +286,7 @@
 		84AA81E32A4A36FB000B658B /* SystemActionLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AA81E22A4A36FB000B658B /* SystemActionLink.swift */; };
 		84AA81E52A4A3981000B658B /* DeeplinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AA81E42A4A3981000B658B /* DeeplinkManager.swift */; };
 		84AA81E72A4A4DEF000B658B /* PumpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AA81E62A4A4DEF000B658B /* PumpView.swift */; };
+		84AB0A833008A62400A13446 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AB0A823008A62400A13446 /* SceneDelegate.swift */; };
 		84D2879F2AC756C8007ED283 /* ContentMargin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84D2879E2AC756C8007ED283 /* ContentMargin.swift */; };
 		86F74AAAB18BF35D92B0C368 /* FollowerShareManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96544DE6994778E3EE02A5DA /* FollowerShareManager.swift */; };
 		891B508524342BE1005DA578 /* CarbAndBolusFlowViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 891B508424342BE1005DA578 /* CarbAndBolusFlowViewModel.swift */; };
@@ -456,6 +459,7 @@
 		B66D1F3E2E6A5D6600471149 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B66D1F3D2E6A5D6600471149 /* Localizable.xcstrings */; };
 		B66D1F402E6A5D6600471149 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = B66D1F3F2E6A5D6600471149 /* InfoPlist.xcstrings */; };
 		BA544402AD140066D11C49A1 /* AICarbEntryFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B74170A98868AB3B079FEC /* AICarbEntryFlowView.swift */; };
+		C00EF87A0749485A994E76A4 /* StatsLiveReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F497822CAC1E4E3991295867 /* StatsLiveReport.swift */; };
 		C110888D2A3913C600BA4898 /* BuildDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = C110888C2A3913C600BA4898 /* BuildDetails.swift */; };
 		C11B9D5B286778A800500CF8 /* SwiftCharts in Frameworks */ = {isa = PBXBuildFile; productRef = C11B9D5A286778A800500CF8 /* SwiftCharts */; };
 		C11B9D5E286778D000500CF8 /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C11B9D5D286778D000500CF8 /* LoopKitUI.framework */; };
@@ -598,6 +602,7 @@
 		E95D380124EADE7C005E2F50 /* DoseStoreProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E95D380024EADE7C005E2F50 /* DoseStoreProtocol.swift */; };
 		E95D380324EADF36005E2F50 /* CarbStoreProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E95D380224EADF36005E2F50 /* CarbStoreProtocol.swift */; };
 		E95D380524EADF78005E2F50 /* GlucoseStoreProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E95D380424EADF78005E2F50 /* GlucoseStoreProtocol.swift */; };
+		E95FD64E14AD488AB6CB9CC4 /* StatsHTMLReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADC85E345564E45A688CD7B /* StatsHTMLReport.swift */; };
 		E98A55ED24EDD6380008715D /* LatestStoredSettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98A55EC24EDD6380008715D /* LatestStoredSettingsProvider.swift */; };
 		E98A55EF24EDD6E60008715D /* DosingDecisionStoreProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98A55EE24EDD6E60008715D /* DosingDecisionStoreProtocol.swift */; };
 		E98A55F124EDD85E0008715D /* MockDosingDecisionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98A55F024EDD85E0008715D /* MockDosingDecisionStore.swift */; };
@@ -637,10 +642,6 @@
 		ECBC485A9A2A9EEBB305893B /* SleepWindowProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A64F2182DB4623EA5838D7 /* SleepWindowProvider.swift */; };
 		EDB84422838C2890E9591717 /* FavoriteMealStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A994D4F8B984ACA53098A7C /* FavoriteMealStore.swift */; };
 		F44D4CCB84197DA2A30505C2 /* HistoryStatisticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA87401FAA0A00255D88A625 /* HistoryStatisticsView.swift */; };
-		C00EF87A0749485A994E76A4 /* StatsLiveReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F497822CAC1E4E3991295867 /* StatsLiveReport.swift */; };
-		46DB05F7412C4FEFB8D3896A /* StatsShareExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00002A0F3D2648E2B53D52FA /* StatsShareExport.swift */; };
-		E95FD64E14AD488AB6CB9CC4 /* StatsHTMLReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADC85E345564E45A688CD7B /* StatsHTMLReport.swift */; };
-		0972B8DE434B407CBC7FB41C /* StatsReportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A190569D34154A91B352E017 /* StatsReportModel.swift */; };
 		F83E4AB09C2DE3C7F693BA2F /* HistoryLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 510749CD85CAF9158B7FD0EC /* HistoryLogger.swift */; };
 		FA8A478CA74207216AE7207F /* PhotoCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D50473AA852E736D41BE01A /* PhotoCaptureView.swift */; };
 		FADE0001000000000000DE02 /* DevelopmentBranchAlerter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADE0001000000000000DE01 /* DevelopmentBranchAlerter.swift */; };
@@ -814,6 +815,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		00002A0F3D2648E2B53D52FA /* StatsShareExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsShareExport.swift; path = Loop/Views/StatsShareExport.swift; sourceTree = SOURCE_ROOT; };
 		01914F228BA4ED60C8974F0D /* MealEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MealEntryView.swift; path = Loop/AICarbEstimation/MealEntry/MealEntryView.swift; sourceTree = SOURCE_ROOT; };
 		0476427A869589797323ADB7 /* rise_rate.caf */ = {isa = PBXFileReference; lastKnownFileType = file; name = rise_rate.caf; path = Loop/CustomAlertSounds/rise_rate.caf; sourceTree = SOURCE_ROOT; };
 		0E52413BB66F3FBBBB255625 /* HistoryLogReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HistoryLogReader.swift; path = Loop/Managers/History/HistoryLogReader.swift; sourceTree = SOURCE_ROOT; };
@@ -1144,6 +1146,7 @@
 		84AA81E22A4A36FB000B658B /* SystemActionLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemActionLink.swift; sourceTree = "<group>"; };
 		84AA81E42A4A3981000B658B /* DeeplinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeeplinkManager.swift; sourceTree = "<group>"; };
 		84AA81E62A4A4DEF000B658B /* PumpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PumpView.swift; sourceTree = "<group>"; };
+		84AB0A823008A62400A13446 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		84D2879E2AC756C8007ED283 /* ContentMargin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentMargin.swift; sourceTree = "<group>"; };
 		871441DB892879996B6F3986 /* CarbEstimationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarbEstimationCoordinator.swift; path = Loop/AICarbEstimation/CarbEstimationCoordinator.swift; sourceTree = SOURCE_ROOT; };
 		87A64F2182DB4623EA5838D7 /* SleepWindowProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SleepWindowProvider.swift; path = Loop/Managers/History/SleepWindowProvider.swift; sourceTree = SOURCE_ROOT; };
@@ -1217,6 +1220,7 @@
 		96544DE6994778E3EE02A5DA /* FollowerShareManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FollowerShareManager.swift; path = Loop/Managers/Follow/FollowerShareManager.swift; sourceTree = SOURCE_ROOT; };
 		9A874F19B9A82448153D7208 /* urgent_low_soon.caf */ = {isa = PBXFileReference; lastKnownFileType = file; name = urgent_low_soon.caf; path = Loop/CustomAlertSounds/urgent_low_soon.caf; sourceTree = SOURCE_ROOT; };
 		9C864C898B3BD21D2DDE837A /* MealEntryPickerOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MealEntryPickerOverlay.swift; path = Loop/AICarbEstimation/UI/MealEntryPickerOverlay.swift; sourceTree = SOURCE_ROOT; };
+		A190569D34154A91B352E017 /* StatsReportModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsReportModel.swift; path = Loop/Managers/History/StatsReportModel.swift; sourceTree = SOURCE_ROOT; };
 		A5A946AEBC412CD2F478CF1E /* MealMetadataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MealMetadataStore.swift; path = Loop/AICarbEstimation/MealEntry/MealMetadataStore.swift; sourceTree = SOURCE_ROOT; };
 		A900531A28D60862000BC15B /* Loop.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = Loop.shortcut; sourceTree = "<group>"; };
 		A900531B28D608CA000BC15B /* Cancel Override.shortcut */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Cancel Override.shortcut"; sourceTree = "<group>"; };
@@ -1324,6 +1328,7 @@
 		B66D1F422E6A5D6600471149 /* mul */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = mul; path = mul.lproj/Main.xcstrings; sourceTree = "<group>"; };
 		B6F22EF72E95A03800CCA05F /* hu */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hu; path = hu.lproj/Intents.strings; sourceTree = "<group>"; };
 		B6F22EF92E95A03C00CCA05F /* uk */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = uk; path = uk.lproj/Intents.strings; sourceTree = "<group>"; };
+		BADC85E345564E45A688CD7B /* StatsHTMLReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsHTMLReport.swift; path = Loop/Managers/History/StatsHTMLReport.swift; sourceTree = SOURCE_ROOT; };
 		BC72488E97E007217B1FBA72 /* CarbEstimateLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CarbEstimateLog.swift; path = Loop/AICarbEstimation/Logging/CarbEstimateLog.swift; sourceTree = SOURCE_ROOT; };
 		BF484846B25AEE0EB4E520A2 /* GlucoseRiskMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GlucoseRiskMetrics.swift; path = Loop/Managers/History/GlucoseRiskMetrics.swift; sourceTree = SOURCE_ROOT; };
 		C1004DEF2981F5B700B8CF94 /* da */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = da; path = da.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -1509,6 +1514,7 @@
 		E9C58A7924DB529A00487A17 /* dynamic_glucose_effect_partially_observed.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = dynamic_glucose_effect_partially_observed.json; sourceTree = "<group>"; };
 		E9C58A7A24DB529A00487A17 /* counteraction_effect_falling_glucose.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = counteraction_effect_falling_glucose.json; sourceTree = "<group>"; };
 		E9C58A7B24DB529A00487A17 /* insulin_effect.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = insulin_effect.json; sourceTree = "<group>"; };
+		F497822CAC1E4E3991295867 /* StatsLiveReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsLiveReport.swift; path = Loop/Managers/History/StatsLiveReport.swift; sourceTree = SOURCE_ROOT; };
 		F5D9C01727DABBE0002E48F6 /* tr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = tr; path = tr.lproj/Intents.strings; sourceTree = "<group>"; };
 		F5D9C01C27DABBE1002E48F6 /* tr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = tr; path = tr.lproj/Main.strings; sourceTree = "<group>"; };
 		F5D9C01E27DABBE2002E48F6 /* tr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = tr; path = tr.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -1518,10 +1524,6 @@
 		F5E0BDDA27E1D71F0033557E /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/Localizable.strings; sourceTree = "<group>"; };
 		F5E0BDE327E1D7230033557E /* he */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = he; path = he.lproj/Localizable.strings; sourceTree = "<group>"; };
 		FA87401FAA0A00255D88A625 /* HistoryStatisticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HistoryStatisticsView.swift; path = Loop/Views/HistoryStatisticsView.swift; sourceTree = SOURCE_ROOT; };
-		F497822CAC1E4E3991295867 /* StatsLiveReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsLiveReport.swift; path = Loop/Managers/History/StatsLiveReport.swift; sourceTree = SOURCE_ROOT; };
-		00002A0F3D2648E2B53D52FA /* StatsShareExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsShareExport.swift; path = Loop/Views/StatsShareExport.swift; sourceTree = SOURCE_ROOT; };
-		BADC85E345564E45A688CD7B /* StatsHTMLReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsHTMLReport.swift; path = Loop/Managers/History/StatsHTMLReport.swift; sourceTree = SOURCE_ROOT; };
-		A190569D34154A91B352E017 /* StatsReportModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatsReportModel.swift; path = Loop/Managers/History/StatsReportModel.swift; sourceTree = SOURCE_ROOT; };
 		FADE0001000000000000DE01 /* DevelopmentBranchAlerter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentBranchAlerter.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -1878,6 +1880,7 @@
 				43F5C2D41B92A4A6003EB13D /* Info.plist */,
 				C1EE9E802A38D0FB0064784A /* BuildDetails.plist */,
 				43776F8F1B8022E90074EA36 /* AppDelegate.swift */,
+				84AB0A823008A62400A13446 /* SceneDelegate.swift */,
 				1D12D3B82548EFDD00B53E8B /* main.swift */,
 				43776F9A1B8022E90074EA36 /* LaunchScreen.storyboard */,
 				43776F951B8022E90074EA36 /* Main.storyboard */,
@@ -3634,6 +3637,7 @@
 				E9B355292935919E0076AB04 /* MissedMealSettings.swift in Sources */,
 				43A51E1F1EB6D62A000736CC /* CarbAbsorptionViewController.swift in Sources */,
 				43776F901B8022E90074EA36 /* AppDelegate.swift in Sources */,
+				84AB0A833008A62400A13446 /* SceneDelegate.swift in Sources */,
 				4372E48B213CB5F00068E043 /* Double.swift in Sources */,
 				430B29932041F5B300BA9F93 /* UserDefaults+Loop.swift in Sources */,
 				43CE7CDE1CA8B63E003CC1B0 /* Data.swift in Sources */,
