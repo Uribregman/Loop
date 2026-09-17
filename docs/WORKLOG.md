@@ -7,6 +7,115 @@ and `docs/DESIGN_SYSTEM.md` / `docs/PROCESS.md` for the standing rules.
 
 ---
 
+## 2026-09-17 — G7: stop forgetting the sensor on a failed handshake
+
+The user sees CGM gaps in Loop only, while the Dexcom app keeps its readings.
+Taken word for word from upstream G7SensorKit `6eabc64` (part of Loop 3.14.7);
+only the G7SensorKit submodule changed. Full detail in step log STEP BP.
+
+**What changed.** A disconnect before the Bluetooth handshake finishes used to be
+treated as "session ended": Loop forgot the sensor and fell back to a throttled
+background scan, a 10–40 minute outage. Now Loop keeps the sensor and waits 15
+minutes; any reading or backfill cancels the wait, and only silence for the full
+15 minutes forgets it. The wait is saved in the CGM state so it survives the app
+being closed. Sensor-reported failures still switch immediately.
+
+**Trade-off.** After a genuine sensor change Loop can take up to 15 minutes longer
+to find the new sensor unless a scan is started manually.
+
+**Verified:** identical to upstream (421 lines); builds for the iOS 26.5 simulator.
+**Not verified:** with a real G7 — watch for gaps over the next days.
+
+---
+
+## 2026-09-17 — Two Omnipod DASH fixes from Loop 3.14.7, taken word for word
+
+Full detail in `Loop-AI-Carb-StepLog.md`, STEP BO. Only the OmnipodKit submodule
+changed (4 files, uncommitted); the Loop app and LoopKit are untouched.
+
+**The pod is no longer disconnected in the middle of a command** when Loop goes
+to the background (upstream `5e46787`). Previously the command could be reported
+as failed even though the pod had done it, leaving the next connection out of step.
+
+**Doses are saved before a pod fault is announced** (upstream `e31f58f`), so the
+insulin history is consistent at the moment the fault is reported.
+
+**Not taken:** the heartbeat fix `b7796d8` repairs a bug that only exists after the
+Pod Keep Alive rewrite, which this fork does not have. The Keep Alive rewrite
+itself was also not taken.
+
+**Verified:** the applied lines are identical to upstream's; the workspace builds
+and the app launches. **Not verified:** with a real pod — do it at a pod change.
+
+---
+
+## 2026-09-16 (later) — Island overlap fixed, alarms quiet during calls, iOS 27 tested
+
+Full detail in `Loop-AI-Carb-StepLog.md`, STEP BN. Core algorithm untouched.
+
+**The island sat on top of the expiry lines** ("compact problems sometimes").
+Two independent causes, both measured on the running app. (1) The island's
+`UIHostingController` kept the intrinsic height of the EMPTY island (16pt)
+after items arrived, so the ~60pt island overflowed its frame and centred over
+the lines — fixed with `sizingOptions = [.intrinsicContentSize]`
+(`StatusTableViewController`). (2) Both lifecycle lines pinned the bar's bottom
+with EQUALITY; whenever one line had height 6 and the other 0 UIKit broke a
+line's height constraint for the life of the process — now `lessThanOrEqual`
+per line plus a low-priority hug (`StatusBarHUDView`).
+
+**Alarms blasted into the ear during phone calls.** `AlertAudioPlayer` plays
+custom alarms through a `.playback` session (also from the background, via the
+`audio` mode) at player volume 1.0, following the call's route, with
+`.duckOthers` lowering the caller. Now, while `CXCallObserver` sees a call:
+`.mixWithOthers` instead of ducking, and unless the route is the loudspeaker or
+a car, volume 0.15 plus a vibration. Loudspeaker/car stay full volume.
+
+**Verified (iPhone 14 Pro, iOS 27 simulator, real onboarded data):** home
+screen, toolbar, meal entry, bolus recommendation + delivery on the simulator
+pump, Bolusing and Pre-meal islands (no overlap at launch or at runtime, top
+and bottom hit edges, collapse returns content exactly), presets, statistics
+(periods, tiles, scrubbing), carb history + glass Entries/Meals segmented
+control (tap and drag), settings, custom alerts (a High alarm fired and played).
+**Not verified:** the in-call path — the simulator cannot place a call; test on
+the phone during a real call.
+
+---
+
+## 2026-09-16 — Loop builds and launches on Xcode 27 / iOS 27
+
+Before this, the fork could not ship on Xcode 27 at all. Full detail in
+`Loop-AI-Carb-StepLog.md`, STEP BM. The core dosing algorithm was not touched
+(LoopKit is byte-identical; no dosing code edited).
+
+**It did not compile** (`FavoriteFoodDetailView.swift`). The Xcode 27 compiler
+rejects assigning a `@State` that has an inline default from `init`. The
+declaration is now `@State private var isConfirmingDelete: Bool` — upstream's
+own fix, lost in the 2026-08-28 revert.
+
+**iOS 27 refused to launch it.** Built with the iOS 27 SDK, an app without the
+UIScene lifecycle is killed before any UI: "UIScene life cycle is required for
+apps built with this SDK" (EXC_BREAKPOINT in UIKit). Added `SceneDelegate.swift`
+and a `UIApplicationSceneManifest`; removed `UIMainStoryboardFile`.
+
+**Not upstream's version, on purpose.** Upstream moved manager startup into the
+scene, which is the likely cause of the skipped CGM readings that got it
+reverted: background Bluetooth/push relaunches need not connect a scene. Here
+`AppDelegate` still runs `initialize()` + `launch()` in `didFinishLaunching`, so
+managers, device refresh and a launch push are handled with no window. Only the
+UI steps (onboarding, home screen, alert playback, reset prompt) wait for
+`LoopAppManager.windowDidBecomeAvailable()`. `DeeplinkManager` is now created
+once the home screen exists (it held a weak nil root before). A reconnected
+scene reuses the existing root controller instead of an empty one.
+
+**Verified:** full workspace builds on Xcode 27 against the iPhone 14 Pro iOS 27
+simulator; app launches and stays up, onboarding appears; log order
+didFinishLaunching → "No window yet" → scene connects → active; a `Loop://`
+deep link during onboarding and a background/foreground round trip do not
+crash. **Not verified:** a real background Bluetooth relaunch (device only),
+and the feature screens past onboarding (simulator tapping not yet permitted).
+
+---
+
 ## 2026-08-23 — The statistics were counting the log twice
 
 The user said insulin per day and carbs per day "aren't real stats and show

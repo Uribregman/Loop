@@ -7,6 +7,21 @@ trusting details below if time has passed.
 spec — read before touching UI), `docs/PROCESS.md` (how to work on this repo),
 `docs/WORKLOG.md` (chronological change history).
 
+## Island overlap + in-call alarm volume (2026-09-16)
+
+The action island no longer draws over the pump/CGM expiry lines (hosting-view sizing +
+line constraints), and custom alarms play quietly with a vibration during a call unless
+it is on speaker/car. Full iOS 27 feature pass done in the simulator — see WORKLOG and
+step log STEP BN. Uncommitted. Still to prove on the phone: an alarm during a real call.
+
+## Xcode 27 / iOS 27 support (2026-09-16)
+
+Loop now builds with Xcode 27 and launches on iOS 27. It needed UIScene adoption
+(iOS 27 SDK kills non-scene apps at launch) and a `@State` declaration fix. The scene
+setup keeps manager startup in `AppDelegate` so background Bluetooth relaunches are
+unaffected — see WORKLOG 2026-09-16 and step log STEP BM. Uncommitted. Still to prove
+on the phone: CGM continuity through background relaunches.
+
 ## There is now a second app: Loop Follow (2026-08-15)
 
 A read-only follower app lives at `<repo root>/../../loop follow/` — outside this
