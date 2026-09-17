@@ -302,11 +302,17 @@ public class StatusBarHUDView: UIView, NibLoadable {
                                                  constant: -Self.lifecycleLineInset),
             line.track.topAnchor.constraint(equalTo: containerView.bottomAnchor,
                                             constant: Self.lifecycleLineTopGap),
-            // EQUALITY, and it is what drives the bar's overall height. The
-            // pills used to define the bottom instead, which left this line
-            // hanging outside the bar's measured height — so the scroll inset
-            // reserved no room for it and the charts slid underneath.
-            line.track.bottomAnchor.constraint(equalTo: glassContainerView.contentView.bottomAnchor,
+            // The bar is at least tall enough to contain this line, which is what
+            // makes the scroll inset and the island below reserve room for it.
+            //
+            // 🐛 NOT EQUALITY. With two lines pinned EQUAL to the same bottom, the
+            // moment one had height 6 and the other 0 — at launch, whichever
+            // device reported its lifecycle first — the constraints conflicted
+            // and UIKit permanently broke a line's `height == 6`. The bar then
+            // mis-measured for the rest of the process and the island was laid
+            // out on top of the lines. The low-priority hug in
+            // `installLifecycleLines` pulls the bar up to the tallest line.
+            line.track.bottomAnchor.constraint(lessThanOrEqualTo: glassContainerView.contentView.bottomAnchor,
                                                constant: -Self.verticalInset),
             line.height,
 
@@ -321,6 +327,14 @@ public class StatusBarHUDView: UIView, NibLoadable {
     /// Both devices get the same line, built by the same code — the sensor's
     /// expiry is no less worth seeing than the pod's.
     private func installLifecycleLines() {
+        // Same resting height as before when no line shows (pills + gap + inset);
+        // the required `lessThanOrEqual` per line wins whenever a line is taller.
+        let hug = glassContainerView.contentView.bottomAnchor.constraint(
+            equalTo: containerView.bottomAnchor,
+            constant: Self.lifecycleLineTopGap + Self.verticalInset)
+        hug.priority = .defaultLow
+        hug.isActive = true
+
         if let pumpGlassView {
             let line = installLifecycleLine(under: pumpGlassView, for: pumpStatusHUD)
             pumpLifecycleLine = line

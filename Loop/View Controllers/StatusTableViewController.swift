@@ -181,6 +181,12 @@ final class StatusTableViewController: LoopChartsTableViewController {
     /// row, so it is pinned to the top with them.
     private lazy var islandHostingController: UIHostingController<ActionIslandView> = {
         let controller = UIHostingController(rootView: ActionIslandView(items: []))
+        // 🐛 Without this the hosting view keeps the intrinsic height it measured
+        // for the EMPTY island (its two 8pt gaps = 16pt) after `rootView` gains
+        // items. The ~60pt island then overflowed a 16pt frame, centred on it,
+        // and drew on top of the expiry lines — "the island still has compact
+        // problems sometimes". This makes every rootView change re-measure.
+        controller.sizingOptions = [.intrinsicContentSize]
         controller.view.translatesAutoresizingMaskIntoConstraints = false
         // Must be clear, or it paints an opaque box behind the glass capsule.
         controller.view.backgroundColor = .clear
