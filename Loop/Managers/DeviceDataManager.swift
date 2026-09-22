@@ -1121,12 +1121,14 @@ extension DeviceDataManager: PumpManagerDelegate {
         dispatchPrecondition(condition: .onQueue(queue))
         log.default("PumpManager:%{public}@ did update state", String(describing: type(of: pumpManager)))
 
-        rawPumpManager = pumpManager.rawValue
+        // Encode the state once: it is saved and also read by the history log.
+        let rawValue = pumpManager.rawValue
+        rawPumpManager = rawValue
 
         // Durable history: catches a finished pod session before the pump manager
         // overwrites its only saved copy. Deduped by pod identity, so calling it
         // on every state update is safe and doubles as the after-relaunch catch-up.
-        historyLogger.observePumpState(pumpManager.rawValue)
+        historyLogger.observePumpState(rawValue)
     }
     
     func pumpManager(_ pumpManager: PumpManager, didRequestBasalRateScheduleChange basalRateSchedule: BasalRateSchedule, completion: @escaping (Error?) -> Void) {
@@ -1702,6 +1704,10 @@ extension DeviceDataManager: TherapySettingsViewModelDelegate {
                 completion(.success(deliveryLimits))
             }
         }
+    }
+    
+    func updateCurrentProfileName() {
+        loopManager.updateCurrentProfileName()
     }
     
     func saveCompletion(therapySettings: TherapySettings) {

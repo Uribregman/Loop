@@ -18,6 +18,15 @@ import SwiftCharts
 
 class StatusViewController: UIViewController, NCWidgetProviding {
 
+    /// Built once: the widget used to create it again on every refresh.
+    private static let insulinFormatter: NumberFormatter = {
+        let numberFormatter = NumberFormatter()
+        numberFormatter.numberStyle = .decimal
+        numberFormatter.minimumFractionDigits = 2
+        numberFormatter.maximumFractionDigits = 2
+        return numberFormatter
+    }()
+
     @IBOutlet weak var hudView: StatusBarHUDView! {
         didSet {
             hudView.loopCompletionHUD.stateColors = .loopStatus
@@ -271,15 +280,7 @@ class StatusViewController: UIViewController, NCWidgetProviding {
                 self.hudView.loopCompletionHUD.loopIconClosed = isClosedLoop
             }
 
-            let insulinFormatter: NumberFormatter = {
-                let numberFormatter = NumberFormatter()
-
-                numberFormatter.numberStyle = .decimal
-                numberFormatter.minimumFractionDigits = 2
-                numberFormatter.maximumFractionDigits = 2
-                
-                return numberFormatter
-            }()
+            let insulinFormatter = Self.insulinFormatter
 
             if let activeInsulin = activeInsulin,
                 let valueStr = insulinFormatter.string(from: activeInsulin)

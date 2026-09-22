@@ -165,12 +165,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     // MARK: - Floating status bar (Liquid Glass)
 
-    /// The CGM / loop / pump bar. Hosted OUTSIDE the table so it stays fixed to
-    /// the top instead of scrolling away with the charts.
-    ///
-    /// It lives in the navigation controller's view: this is a
-    /// `UITableViewController`, so `view` IS the scrolling table and anything
-    /// added there would scroll.
+    /// The CGM / loop / pump bar, fixed to the top of the screen while the charts
+    /// scroll beneath it. See `installFloatingHeaderIfNeeded` for where it lives.
     private lazy var floatingHUDView: StatusBarHUDView = {
         let hud = StatusBarHUDView(frame: .zero)
         hud.translatesAutoresizingMaskIntoConstraints = false
@@ -206,9 +202,25 @@ final class StatusTableViewController: LoopChartsTableViewController {
         return controller
     }()
 
+    /// Clear space above the pills, as tall as the top safe area.
+    ///
+    /// The pills place themselves below the status bar using their own safe area.
+    /// Inside the table (see `installFloatingHeaderIfNeeded`) that safe area is
+    /// zero, because the table already consumes it for its content inset, so
+    /// without this the pills sat under the clock and battery.
+    private lazy var floatingHeaderTopSpacer: UIView = {
+        let spacer = UIView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.backgroundColor = .clear
+        return spacer
+    }()
+
+    private lazy var floatingHeaderTopSpacerHeight: NSLayoutConstraint =
+        floatingHeaderTopSpacer.heightAnchor.constraint(equalToConstant: 0)
+
     /// Status pills + island as one fixed top header.
     private lazy var floatingHeaderView: UIStackView = {
-        let stack = UIStackView(arrangedSubviews: [floatingHUDView, islandHostingController.view])
+        let stack = UIStackView(arrangedSubviews: [floatingHeaderTopSpacer, floatingHUDView, islandHostingController.view])
         stack.axis = .vertical
         // ZERO, deliberately. The gap above the island is drawn INSIDE the
         // island's own view (see `ActionIslandView.topGap`): as stack spacing it
@@ -225,23 +237,34 @@ final class StatusTableViewController: LoopChartsTableViewController {
     }()
 
     private func installFloatingHeaderIfNeeded() {
-        guard floatingHeaderView.superview == nil, let host = navigationController?.view else { return }
+        guard floatingHeaderView.superview == nil else { return }
 
-        // Deliberately NOT `addChild`: the header lives in the navigation
-        // controller's view, i.e. outside this view controller's own hierarchy,
-        // and UIKit raises an exception when a child view controller's view is
-        // installed outside its parent's tree. The lazy property keeps the
-        // hosting controller alive, which is all this static view needs.
+        // 🐛 It used to live in the NAVIGATION CONTROLLER's view, so it did not
+        // travel with push/pop transitions and had to be hidden and re-shown
+        // around them. Mid back-swipe it was drawn over the screen being left
+        // (its nav bar, back button and title), and every fix was a timing rule.
+        // Now it is part of this screen: pinned to the table's `frameLayoutGuide`
+        // it stays fixed while the charts scroll, and it slides, follows the
+        // finger and is covered by the incoming screen exactly like the bottom
+        // bar — with no visibility bookkeeping at all.
+        //
+        // The island's hosting controller is still not added as a child; the lazy
+        // property keeps it alive, which is all this static view needs.
+        let host = tableView!
         host.addSubview(floatingHeaderView)
+        // Draw above the cells; `keepFloatingHeaderInFront` handles touches.
+        floatingHeaderView.layer.zPosition = 1
 
         NSLayoutConstraint.activate([
-            floatingHeaderView.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            floatingHeaderView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            floatingHeaderView.leadingAnchor.constraint(equalTo: host.frameLayoutGuide.leadingAnchor),
+            floatingHeaderView.trailingAnchor.constraint(equalTo: host.frameLayoutGuide.trailingAnchor),
             // Pinned to the very top, NOT the safe area, so the header's white
             // background covers the status-bar strip the way a navigation bar
             // does. The pills position themselves against the safe area inside.
-            floatingHeaderView.topAnchor.constraint(equalTo: host.topAnchor),
+            floatingHeaderView.topAnchor.constraint(equalTo: host.frameLayoutGuide.topAnchor),
+            floatingHeaderTopSpacerHeight,
         ])
+        updateFloatingHeaderTopSpacer()
 
         // The bar grows and shrinks with the pump lifecycle line, and that
         // changes how much scroll inset has to be reserved beneath it.
@@ -462,7 +485,9 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        keepFloatingHeaderInFront()
         healFloatingHeaderVisibility()
+        updateFloatingHeaderTopSpacer()
         updateFloatingHeaderInset()
 
         // Deferred to here, not `viewWillAppear`: the header's height — and so
@@ -474,10 +499,34 @@ final class StatusTableViewController: LoopChartsTableViewController {
         }
     }
 
-    /// Put the top header back if it is hidden while it has no business being
-    /// hidden. Deliberately **show-only**: it can never take the header away, so
-    /// running it on every layout pass cannot introduce a new way to lose it —
-    /// mid-push, mid-swipe and behind a sheet it simply does nothing.
+    /// Keep the space above the pills equal to the top safe area (status bar /
+    /// Dynamic Island). Only touches the constraint when the value really changed,
+    /// so calling it on every layout pass cannot start a layout loop.
+    private func updateFloatingHeaderTopSpacer() {
+        let top = tableView.safeAreaInsets.top
+        guard abs(floatingHeaderTopSpacerHeight.constant - top) > 0.5 else { return }
+        floatingHeaderTopSpacerHeight.constant = top
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateFloatingHeaderTopSpacer()
+    }
+
+    /// The table adds cell views as it scrolls, and a view added later sits above
+    /// the header for hit-testing, which would steal taps on the pills and island.
+    /// `zPosition` only affects drawing, so reorder too. Runs every layout pass —
+    /// including every scroll frame — and only moves anything when it must.
+    private func keepFloatingHeaderInFront() {
+        guard floatingHeaderView.superview === tableView,
+              tableView.subviews.last !== floatingHeaderView else { return }
+        tableView.bringSubviewToFront(floatingHeaderView)
+    }
+
+    /// Put the top header back if it is hidden. Deliberately **show-only**: it can
+    /// never take the header away, so running it on every layout pass cannot
+    /// introduce a new way to lose it. Nothing hides the header any more (it
+    /// travels with this screen), so this only guards against a cause not found.
     ///
     /// This is the backstop for the "HUD disappeared until I restarted the app"
     /// class of bug. The individual causes are fixed at their source (see
@@ -491,9 +540,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
             floatingHUDView.isHidden = false
         }
 
-        let shouldShow = navigationController?.topViewController === self
-            && presentedViewController == nil
-        if shouldShow, floatingHeaderView.isHidden {
+        if floatingHeaderView.isHidden {
             floatingHeaderView.isHidden = false
             floatingHeaderView.alpha = 1
         }
@@ -506,11 +553,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
         navigationController?.setToolbarHidden(false, animated: animated)
 
         installFloatingHeaderIfNeeded()
-        // ⚠️ NOT shown here. `viewWillAppear` fires the moment an interactive
-        // back-swipe BEGINS, and the header is hosted by the navigation
-        // controller so it does not travel with the transition — showing it now
-        // paints the home pills on top of the screen you are still leaving.
-        // Shown in `viewDidAppear` instead; see `syncFloatingHeaderVisibility`.
         floatingHUDView.isHidden = !shouldShowHUD
         // Not animated: arriving on the screen should find the island already in
         // its correct state, not animating into it.
@@ -553,57 +595,9 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         onscreen = true
 
-        // Only now — the transition has actually completed and we really are the
-        // visible screen. A cancelled swipe never reaches here, which is exactly
-        // the behaviour we want.
-        syncFloatingHeaderVisibility(animated: animated)
-
         deviceManager.analyticsServicesManager.didDisplayStatusScreen()
 
         deviceManager.checkDeliveryUncertaintyState()
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        // Belt and braces: if a transition ended with us NOT on top, make sure the
-        // header went with us. Cheap, and it closes the case where an interactive
-        // gesture resolves in a way the will/did pair alone did not cover.
-        syncFloatingHeaderVisibility(animated: false)
-    }
-
-    /// Single source of truth for whether the floating glass header is on screen:
-    /// **it is visible if, and only if, this controller is the top of the
-    /// navigation stack.**
-    ///
-    /// 🐛 The bug this replaces: the header was toggled in
-    /// `viewWillAppear`/`viewWillDisappear`. `viewWillAppear` fires when an
-    /// interactive back-swipe STARTS, not when it finishes — and because the
-    /// header is a subview of the navigation controller's view (see
-    /// `installFloatingHeaderIfNeeded`) it does not slide with the transition. So
-    /// starting a swipe painted the home screen's pills and island over the top
-    /// of the screen you were still on, and abandoning the swipe left them there.
-    ///
-    /// Asking "am I actually on top?" is immune to how the gesture resolves,
-    /// which a will/did callback pair is not.
-    private func syncFloatingHeaderVisibility(animated: Bool) {
-        let shouldShow = navigationController?.topViewController === self
-            && presentedViewController == nil
-        guard floatingHeaderView.isHidden == shouldShow else {
-            floatingHeaderView.alpha = 1
-            return
-        }
-
-        guard animated, shouldShow else {
-            floatingHeaderView.isHidden = !shouldShow
-            floatingHeaderView.alpha = 1
-            return
-        }
-
-        // Fade in rather than snap: the header arrives after the push/pop
-        // animation has finished, so an abrupt appearance reads as a glitch.
-        floatingHeaderView.alpha = 0
-        floatingHeaderView.isHidden = false
-        UIView.animate(withDuration: 0.2) { self.floatingHeaderView.alpha = 1 }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -611,15 +605,10 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         onscreen = false
 
-        // The bar is hosted by the navigation controller, so it would otherwise
-        // stay on screen over whatever gets pushed on top of this screen.
         if presentedViewController == nil {
             navigationController?.setNavigationBarHidden(false, animated: animated)
-            // Hide IMMEDIATELY and unanimated. This fires as a push begins, and
-            // the header must be gone before the incoming screen's top bar is
-            // drawn — a fade here is what lets both be visible together.
-            floatingHeaderView.isHidden = true
-            floatingHeaderView.alpha = 1
+            // The header is NOT hidden here: it belongs to this screen and leaves
+            // with it, covered by the incoming screen like the bottom bar.
         }
     }
 

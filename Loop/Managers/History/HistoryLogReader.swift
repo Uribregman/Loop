@@ -71,24 +71,64 @@ enum HistoryLogReader {
     /// than the whole history. Malformed lines are skipped silently; a log that
     /// refuses to open because of one bad byte would be worse than useless.
     static func read(files: [URL], progress: ((Double) -> Void)? = nil) -> [HistoryLine] {
-        let decoder = JSONDecoder()
         var results: [HistoryLine] = []
         let ordered = files.sorted { $0.lastPathComponent < $1.lastPathComponent }
 
         for (index, url) in ordered.enumerated() {
-            autoreleasepool {
-                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return }
-                for line in data.split(separator: 0x0A) where !line.isEmpty {
-                    if var decoded = try? decoder.decode(HistoryLine.self, from: Data(line)) {
-                        // Parse the timestamp once, here, for every later pass.
-                        decoded.parsedDate = HistoryTimestamp.formatter.date(from: decoded.at)
-                        results.append(decoded)
-                    }
-                }
-            }
+            results.append(contentsOf: lines(in: url))
             progress?(Double(index + 1) / Double(max(ordered.count, 1)))
         }
         return results
+    }
+
+    /// Parsed lines of one monthly file, reused while the file is unchanged.
+    ///
+    /// The statistics screen and the live report both re-read every month on each
+    /// open/refresh, but only the current month ever grows — past months were being
+    /// parsed again for nothing. Keyed on size + modification date, so an append is
+    /// always picked up. `NSCache` lets iOS drop it under memory pressure.
+    private final class ParsedFile {
+        let size: Int
+        let modified: Date
+        let lines: [HistoryLine]
+        init(size: Int, modified: Date, lines: [HistoryLine]) {
+            self.size = size
+            self.modified = modified
+            self.lines = lines
+        }
+    }
+
+    private static let cache: NSCache<NSURL, ParsedFile> = {
+        let cache = NSCache<NSURL, ParsedFile>()
+        cache.totalCostLimit = 40 * 1024 * 1024
+        return cache
+    }()
+
+    private static func lines(in url: URL) -> [HistoryLine] {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let size = values?.fileSize ?? -1
+        let modified = values?.contentModificationDate ?? .distantPast
+        if let hit = cache.object(forKey: url as NSURL), hit.size == size, hit.modified == modified {
+            return hit.lines
+        }
+
+        let decoder = JSONDecoder()
+        var parsed: [HistoryLine] = []
+        autoreleasepool {
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return }
+            for line in data.split(separator: 0x0A) where !line.isEmpty {
+                if var decoded = try? decoder.decode(HistoryLine.self, from: Data(line)) {
+                    // Parse the timestamp once, here, for every later pass.
+                    decoded.parsedDate = HistoryTimestamp.formatter.date(from: decoded.at)
+                    parsed.append(decoded)
+                }
+            }
+        }
+        if size >= 0 {
+            cache.setObject(ParsedFile(size: size, modified: modified, lines: parsed), forKey: url as NSURL,
+                            cost: parsed.count * MemoryLayout<HistoryLine>.stride)
+        }
+        return parsed
     }
 }
 

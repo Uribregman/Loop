@@ -104,7 +104,12 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
 
     private var reloading = false
 
-    private var carbStatuses: [CarbStatus<StoredCarbEntry>] = []
+    private var carbStatuses: [CarbStatus<StoredCarbEntry>] = [] {
+        didSet { cachedMeals = nil }
+    }
+
+    /// `meals` is read for the row count and again for every row drawn; group once per reload.
+    private var cachedMeals: [[CarbStatus<StoredCarbEntry>]]?
 
     // MARK: - History display mode (per-entry vs. grouped by meal)
 
@@ -115,6 +120,13 @@ final class CarbAbsorptionViewController: LoopChartsTableViewController, Identif
     /// truth — an entry belongs to the meal it was saved with, so unrelated entries
     /// are never mixed together. Entries with no matching meal are shown on their own.
     private var meals: [[CarbStatus<StoredCarbEntry>]] {
+        if let cachedMeals { return cachedMeals }
+        let groups = groupedMeals()
+        cachedMeals = groups
+        return groups
+    }
+
+    private func groupedMeals() -> [[CarbStatus<StoredCarbEntry>]] {
         let sorted = carbStatuses.sorted { $0.entry.startDate > $1.entry.startDate }
         let tolerance: TimeInterval = 60
         var claimed = [Bool](repeating: false, count: sorted.count)

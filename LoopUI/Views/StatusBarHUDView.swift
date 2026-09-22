@@ -233,6 +233,9 @@ public class StatusBarHUDView: UIView, NibLoadable {
         let trackEffect: UIGlassEffect
         var fillWidth: NSLayoutConstraint!
         var height: NSLayoutConstraint!
+        /// What the fill last showed, so an unchanged update doesn't rebuild the glass.
+        var shownFraction: CGFloat?
+        var shownColor: UIColor?
 
         init() {
             effect = UIGlassEffect(style: .regular)
@@ -396,7 +399,14 @@ public class StatusBarHUDView: UIView, NibLoadable {
         // back off `fill.effect` and mutating that does nothing. That is why
         // BOTH lines went colourless, and why layering an opaque wash on top
         // "fixed" it in a way that destroyed the reflection.
-        line.effect.tintColor = progress.progressState.color
+        let color = progress.progressState.color
+        // Re-rendering the glass costs a frame; skip updates that change nothing visible.
+        if let shown = line.shownFraction, abs(shown - fraction) < 0.001, line.shownColor == color {
+            return
+        }
+        line.shownFraction = fraction
+        line.shownColor = color
+        line.effect.tintColor = color
         line.fill.effect = line.effect
         line.fillWidth.isActive = false
         line.fillWidth = line.fill.widthAnchor.constraint(equalTo: line.track.widthAnchor,

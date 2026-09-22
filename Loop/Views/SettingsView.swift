@@ -150,7 +150,9 @@ public struct SettingsView: View {
                 case .favoriteFoods:
                     FavoriteFoodsView()
                 case .preferences:
-                    PreferencesView(viewModel: PreferencesViewModel(preferencesProvider: Preferences.shared)).environmentObject(displayGlucosePreference)
+                    PreferencesView(viewModel: PreferencesViewModel(preferencesProvider: Preferences.shared))
+                        .environmentObject(displayGlucosePreference)
+                        .environment(\.dismissAction, { self.sheet = nil })
                 case .aiCarbEstimation:
                     NavigationView {
                         AICarbSettingsView()
@@ -286,15 +288,17 @@ extension SettingsView {
     }
 
     private var therapySettingsView: some View {
-        TherapySettingsView(
-            mode: .settings,
-            viewModel: TherapySettingsViewModel(
+        // One view model per visit to the screen. Building it inline made a new snapshot on every
+        // Settings redraw, and a snapshot taken before a save replaced the live one: the screen
+        // showed old values, and the next edit saved those old values back (undoing a loaded profile).
+        TherapySettingsScreen { [viewModel] in
+            TherapySettingsViewModel(
                 therapySettings: viewModel.therapySettings(),
                 sensitivityOverridesEnabled: FeatureFlags.sensitivityOverridesEnabled,
                 adultChildInsulinModelSelectionEnabled: FeatureFlags.adultChildInsulinModelSelectionEnabled,
                 delegate: viewModel.therapySettingsViewModelDelegate
             )
-        )
+        }
         .environmentObject(displayGlucosePreference)
         .environment(\.dismissAction, self.dismiss)
         .environment(\.appName, self.appName)
@@ -610,6 +614,19 @@ extension SettingsView {
     @ViewBuilder
     private func serviceImage(uiImage: UIImage?) -> some View {
         deviceImage(uiImage: uiImage)
+    }
+}
+
+/// Hosts `TherapySettingsView` with a view model that lives as long as the screen does.
+fileprivate struct TherapySettingsScreen: View {
+    @StateObject private var viewModel: TherapySettingsViewModel
+
+    init(makeViewModel: @escaping () -> TherapySettingsViewModel) {
+        _viewModel = StateObject(wrappedValue: makeViewModel())
+    }
+
+    var body: some View {
+        TherapySettingsView(mode: .settings, viewModel: viewModel)
     }
 }
 

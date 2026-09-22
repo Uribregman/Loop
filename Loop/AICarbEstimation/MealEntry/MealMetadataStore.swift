@@ -49,9 +49,19 @@ enum MealMetadataStore {
 
     // MARK: - Metadata
 
+    /// Decoded list kept in memory. The carb history screen matches meals once per
+    /// row, which decoded up to 300 saved meals for every row it drew. Only `save`
+    /// writes the list, and it refreshes this copy.
+    private static let cacheLock = NSLock()
+    private static var cached: [MealMetadata]?
+
     static func all() -> [MealMetadata] {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let list = try? JSONDecoder().decode([MealMetadata].self, from: data) else { return [] }
+        if let cached = cacheLock.withLock({ cached }) {
+            return cached
+        }
+        let list = UserDefaults.standard.data(forKey: key)
+            .flatMap { try? JSONDecoder().decode([MealMetadata].self, from: $0) } ?? []
+        cacheLock.withLock { cached = list }
         return list
     }
 
@@ -62,6 +72,7 @@ enum MealMetadataStore {
         if let data = try? JSONEncoder().encode(list) {
             UserDefaults.standard.set(data, forKey: key)
         }
+        cacheLock.withLock { cached = list }
     }
 
     /// Best metadata match for a group of carb records (by start-time overlap).

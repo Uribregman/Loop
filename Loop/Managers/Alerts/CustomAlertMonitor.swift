@@ -312,11 +312,20 @@ struct CustomAlertSettings: Codable, Equatable {
 
     private static let key = "com.loopkit.Loop.customAlertSettings"
 
+    /// The decoded settings, kept in memory. `load()` runs on every CGM reading and
+    /// reservoir update, and decoding the stored JSON each time was wasted work: the
+    /// settings only change through `save()`, which refreshes this copy.
+    private static let cacheLock = NSLock()
+    private static var cached: CustomAlertSettings?
+
     static func load() -> CustomAlertSettings {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let decoded = try? JSONDecoder().decode(CustomAlertSettings.self, from: data) else {
-            return CustomAlertSettings()
+        if let cached = cacheLock.withLock({ cached }) {
+            return cached
         }
+        let decoded = UserDefaults.standard.data(forKey: key)
+            .flatMap { try? JSONDecoder().decode(CustomAlertSettings.self, from: $0) }
+            ?? CustomAlertSettings()
+        cacheLock.withLock { cached = decoded }
         return decoded
     }
 
@@ -324,6 +333,7 @@ struct CustomAlertSettings: Codable, Equatable {
         if let data = try? JSONEncoder().encode(self) {
             UserDefaults.standard.set(data, forKey: Self.key)
         }
+        Self.cacheLock.withLock { Self.cached = self }
     }
 }
 

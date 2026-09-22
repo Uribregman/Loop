@@ -7,6 +7,188 @@ and `docs/DESIGN_SYSTEM.md` / `docs/PROCESS.md` for the standing rules.
 
 ---
 
+## 2026-09-23 — Six speed-ups in this fork's own code
+
+1. Custom alarms: `CustomAlertSettings.load()` ran on every CGM reading and reservoir
+   update and decoded the stored JSON each time. Now kept in memory (lock-guarded);
+   `save()` refreshes the copy.
+2. Live statistics report: the first automatic refresh (full history parse) waited on
+   launch; now 30 s after start (manual "refresh now" still immediate).
+3. Active Carbohydrates: `meals` regrouped on every row lookup and
+   `MealMetadataStore.all()` decoded up to 300 meals per row. Grouping is cached until
+   the carb list reloads; the meal store keeps its decoded list in memory (save refreshes it).
+4. Today widget: the insulin formatter in the fork's update path is built once (Loop's
+   original copy of it was left alone).
+5. Statistics / live report: `HistoryLogReader` caches each month's parsed lines, keyed
+   on file size + modification date (NSCache), so only the growing month is re-parsed.
+6. Follow: already loads the follower list once at start-up — nothing to change.
+Loop's original code and the algorithm untouched.
+
+Verified in both simulators (iOS 27.0 and 26.5): build OK; live report NOT written at
+25 s after launch, written by 35 s; custom alarm set to 121/123 mg/dL through the screen
+fired "High Glucose" on the next reading (proves the cache refreshes on save); alarm
+settings restored afterwards; Statistics fully shown within 0.6 s of opening; carb
+screen Entries/Meals switch fine; no crash reports. NOT verified: carb grouping WITH
+entries (simulators have no carbs), the Today widget on screen (Today extensions no
+longer display on iOS 26/27 — compile only), the phone. Not committed.
+
+---
+
+## 2026-09-22 (night) — Profiles can be edited
+
+A profile's screen is now the Therapy Settings screen in "profile editor" mode
+(`TherapySettingsView(profileTitle:viewModel:header:)`): same cards, same editors,
+same guardrail warnings and Face ID / passcode. The editors' view model gets a
+`ProfileEditingDelegate` instead of `DeviceDataManager`, so:
+- a saved edit is written to the profile file only (`ProfileViewModel.updateProfile`);
+- basal-schedule and delivery-limit "syncs" return locally — nothing goes to the pump
+  until the profile is loaded (the normal load path sends limits, then basal);
+- Loop's live settings are untouched.
+Editing the ACTIVE profile asks "Use the New Values Now?" (Use Now → loads it; the editor
+already authenticated; Later → it shows as Edited until loaded). Profiles saved by older
+builds show the current Safety Limit / Pre-Meal / Delivery Limits and are upgraded with
+them on the first edit. Insulin model and Support are hidden in the profile editor.
+
+Verified by editing in the simulators:
+- iOS 27.0: inactive B limit 70→73 (file 73, live stays 69, no prompt); active R limit
+  69→71 → prompt → Use Now → live 71, R Active.
+- iOS 26.5: inactive X 80→79 (no prompt, live 68); active hfh 68→70 → Later → live stays
+  68, hfh Edited.
+Basal + delivery limits (2026-09-23), checked against the mock pump's own saved state
+(Documents/PumpManagerState.plist):
+- iOS 27.0: inactive B basal 2:00 0.05→0.15 and limits 0.3/5.15→0.35/4.1 → profile file
+  changed, pump schedule still 0.05, Loop limits unchanged. Load B → pump schedule
+  0.05/0.15, Loop max basal 0.35, max bolus 4.1.
+- iOS 26.5: inactive X basal 2:00 → 0.2, limits → 0.45/3.1 → pump still 0.05, Loop
+  0.3/5.15. Load X → pump 0.05/0.2, Loop 0.45/3.1. Cancelling Face ID saved nothing.
+NOT verified: the phone. Algorithm untouched. Not committed.
+
+---
+
+## 2026-09-22 (evening) — Profiles: loading now really changes the settings
+
+Reported: loading a profile "doesn't actually change anything". Two causes, both fixed:
+1. **Stale Therapy Settings screen (the real bug).** `SettingsView` built a new
+   `TherapySettingsViewModel` snapshot inline on every redraw. A snapshot taken before a
+   load replaced the live one 16 ms after the load saved, so the screen kept the old
+   values, the profile showed "Edited" right after loading, and — worse — the next edit on
+   that screen would have saved the old values back over the loaded profile. Proven with
+   logging (load saved ISF 52, then a TSVM holding ISF 50 attached). Fix: the screen now
+   gets ONE view model per visit (`TherapySettingsScreen`, `@StateObject`).
+2. **Profiles only held 4 settings.** They now also save/load the Glucose Safety Limit,
+   Pre-Meal/Workout ranges and Delivery Limits (optional fields, so older profiles still
+   load and keep the current values for those; the profile screen says so). Validation
+   covers the new fields (guardrails, pump increments), only for limits the profile
+   actually changes. Load order: delivery limits to the pump (cancels a too-high temp
+   basal) → basal schedule to the pump → one settings save. Float-noise tolerance added
+   to the basal/limit checks.
+
+Verified by actually loading (simulated Face ID in the simulator):
+- iOS 27.0: B (limit 70) → load A → 67 shown immediately, A "Active" (not Edited);
+  load R (old 4-setting profile) → sensitivity 52 → 50; values survive an app restart.
+- iOS 26.5: save X at 80 → edit limit to 77 (X shows Edited) → load X → back to 80, Active.
+NOT verified: a profile whose delivery limits differ (pump sync of limits), Nightscout
+upload, the phone. Algorithm untouched. Not committed.
+
+---
+
+## 2026-09-22 (later) — Profiles moved into Therapy Settings, restyled
+
+Profiles is no longer a separate row and sheet in Settings. It is the first card
+on the Therapy Settings screen, above the settings it saves and loads.
+- The card lists saved profiles with a check and an "Active" pill (orange
+  "Edited" once the schedules no longer match), shows "These settings no longer
+  match X / Update X" when they drift, and has an accent capsule "Save as New
+  Profile" (Liquid Glass on iOS 26). Long-press a profile for Move Up/Down,
+  Rename, Delete. Tap one to open it.
+- Profile screen: the same cards as Therapy Settings, a summary card, the
+  standard full-width "Load Profile" button (reads "Active Profile" and is
+  disabled when it is already in use), Rename/Delete in the ••• menu. Load still
+  asks to confirm, then Face ID/passcode, then sends basal to the pump and
+  saves all four schedules as one change, then goes back to Therapy Settings,
+  where the cards now show the loaded values.
+- All naming, rename, replace and delete prompts are native alerts (removed the
+  hand-made overlay editors `NewProfileEditor`, `RenameProfileEditor` and the old
+  `ProfileView` sheet). Controls expand on press, success haptic on save and load.
+- `ProfileViewModel` now reads and writes through the Therapy Settings screen's
+  `TherapySettingsViewModel` (whose `delegate` became `private(set)`), so the two
+  can't disagree. It keeps a strong reference and re-attaches when Settings builds
+  a new one — with a weak reference the model vanished and the Basal Rates card was
+  empty (found and fixed in this session).
+- Algorithm untouched.
+
+Verified in the iOS 27 simulator: the card on Therapy Settings; Save as New Profile
+(Save disabled while empty) → the new profile animates in, checked; profile screen
+with all four cards; ••• menu; Delete → back to Therapy Settings automatically;
+active profile shows "Active Profile" disabled; Settings no longer has a Profiles
+row. NOT verified: an actual load (needs the passcode), the "Edited" state (editing
+a schedule needs the passcode), the phone. Not committed.
+
+---
+
+## 2026-09-22 — Profiles (save/load therapy settings), Basal Lock check, speed-ups
+
+**Profiles** (Loop and Learn's `profiles` customization, ported by hand and hardened).
+Settings → Configuration → Profiles, under Therapy Settings. A profile stores the
+four schedules — correction range, carb ratios, basal rates, insulin sensitivities —
+as JSON in the app's Documents/LoopProfile. The active profile's name is uploaded
+to Nightscout (profile store) for LoopFollow.
+- New LoopKitUI files: `ProfileViewModel(+FileManagement).swift`, `ProfileView`,
+  `ProfilePreviewView`, `NewProfileEditor`, `RenameProfileEditor` (+ LoopKit pbxproj).
+- Wiring: `SettingsView` row + sheet (one view model per sheet via `ProfilesSheet`),
+  `TherapySettingsViewModelDelegate.updateCurrentProfileName()` (default no-op, so
+  onboarding needs no change), `DeviceDataManager`/`LoopDataManager` just post the
+  existing `.preferences` notification so settings re-upload,
+  NightscoutService `StoredSettings.profileSet` names the profile.
+- Changes from the LnL version: loading asks for Face ID / passcode; the pump
+  accepts the basal schedule first, then all four schedules are saved as ONE
+  settings change (LnL saved four times → Loop could run on a half-loaded mix);
+  no force-unwrap crash when a schedule is missing; blank names blocked; one
+  corrupt file no longer hides every profile; files written atomically with
+  file protection; validation also checks correction range ≥ suspend threshold
+  and the pump's basal-entry limit; updating a profile keeps its place.
+- Algorithm untouched. Loading uses the same save path as the Therapy Settings screen.
+
+**Basal Lock** was already in the fork (Settings → Preferences → Basal Lock,
+200–300 mg/dL; the logic is the LnL code already in DoseMath — untouched). Saving
+it already requires Face ID / passcode. Only change: the Preferences sheet's Done
+now closes just that sheet.
+
+**Speed/cleanup, only in this fork's own code:** history log writes a CGM
+backfill/pump-event batch with one file open per month instead of one per record,
+and reads its storage location without queueing behind writes; pump state encoded
+once per update instead of twice; statistics screens reuse cached date formatters
+(hour/weekday labels were rebuilt on every redraw); the pod/sensor lines under the
+top pills skip re-rendering the glass when nothing changed.
+
+Verified in the iOS 27 simulator: build OK; Profiles row; add (Add disabled while
+empty; keyboard closes); list + checkmark; detail view; Load → passcode prompt,
+cancel leaves settings unchanged; rename keeps the checkmark; delete; survives
+relaunch; Done closes only the sheet. NOT verified: an actual load changing
+settings (needs the passcode), Nightscout upload, the phone. Not committed.
+
+---
+
+## 2026-09-17 — Home pills move with the screen, like the bottom bar
+
+Mid back-swipe the home screen's pills were drawn over the screen being left
+(its back button and title). Full detail in step log STEP BQ.
+
+**Cause.** The pills lived in the navigation controller's view, so they had to be
+hidden and re-shown around every transition, and a layout backstop re-showed them
+mid-swipe because iOS already treats the home screen as "top" when a swipe starts.
+
+**Fix.** The pills are now part of the home screen itself, pinned to the top of
+the table (`frameLayoutGuide`), so they travel with it exactly like the bottom bar
+and need no show/hide timing. A clear spacer the height of the top safe area keeps
+them below the status bar, and they are kept in front of the table's cells so taps
+still reach them.
+
+**Verified** in the simulator: resting layout unchanged, scrolling, push, mid-swipe,
+cancelled swipe, back, pill tap, island show/tap/hide. **Not verified** on the phone.
+
+---
+
 ## 2026-09-17 — G7: stop forgetting the sensor on a failed handshake
 
 The user sees CGM gaps in Loop only, while the Dexcom app keeps its readings.

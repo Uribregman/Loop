@@ -44,30 +44,29 @@ final class HistoryLogger {
     // MARK: - Glucose
 
     func record(glucose samples: [NewGlucoseSample]) {
-        guard store.isEnabled else { return }
-        for sample in samples {
-            // Display-only and manually entered values are deliberately kept:
-            // "what did I actually see" matters for reviewing an excursion later.
-            store.append(GlucoseHistoryRecord(
+        guard store.isEnabled, !samples.isEmpty else { return }
+        let trendUnit = HKUnit.milligramsPerDeciliter.unitDivided(by: .minute())
+        // Display-only and manually entered values are deliberately kept:
+        // "what did I actually see" matters for reviewing an excursion later.
+        store.append(contentsOf: samples.map { sample in
+            (record: GlucoseHistoryRecord(
                 at: HistoryTimestamp.string(from: sample.date),
                 mgdl: sample.quantity.doubleValue(for: .milligramsPerDeciliter),
                 trend: sample.trend.map { String(describing: $0) },
-                trendRate: sample.trendRate?.doubleValue(
-                    for: HKUnit.milligramsPerDeciliter.unitDivided(by: .minute())),
+                trendRate: sample.trendRate?.doubleValue(for: trendUnit),
                 source: sample.device?.name,
                 syncIdentifier: sample.syncIdentifier
-            ), at: sample.date)
-        }
+            ), date: sample.date)
+        })
     }
 
     // MARK: - Doses
 
     func record(pumpEvents events: [NewPumpEvent]) {
         guard store.isEnabled else { return }
-        for event in events {
-            guard let dose = event.dose else { continue }
-            store.append(doseRecord(dose), at: dose.startDate)
-        }
+        store.append(contentsOf: events.compactMap { event in
+            event.dose.map { (record: doseRecord($0), date: $0.startDate) }
+        })
     }
 
     private func doseRecord(_ dose: DoseEntry) -> DoseHistoryRecord {

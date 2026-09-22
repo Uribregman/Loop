@@ -87,9 +87,30 @@ final class HistoryLogStore {
     /// Resolved once per process — the answer can't change without an app
     /// relaunch (entitlement) or a sign-in the user must act on anyway.
     private lazy var resolved: (directory: URL?, location: HistoryLogLocation) = {
-        if let iCloud = iCloudDirectory { return (iCloud, .iCloud) }
-        return (localDirectory, .local)
+        let value: (directory: URL?, location: HistoryLogLocation)
+        if let iCloud = iCloudDirectory {
+            value = (iCloud, .iCloud)
+        } else {
+            value = (localDirectory, .local)
+        }
+        resolvedLock.withLock { resolvedCache = value }
+        return value
     }()
+
+    /// A copy of `resolved` that other threads can read without queueing behind
+    /// file writes. Only `resolved` sets it, on `queue`.
+    private let resolvedLock = NSLock()
+    private var resolvedCache: (directory: URL?, location: HistoryLogLocation)?
+
+    /// `resolved`, read from any thread. Once resolved (normally right after launch,
+    /// by `prepare()`) this never waits on `queue`, so the main thread can't get
+    /// stuck behind a slow iCloud write.
+    private var resolvedFromAnyThread: (directory: URL?, location: HistoryLogLocation) {
+        if let cached = resolvedLock.withLock({ resolvedCache }) {
+            return cached
+        }
+        return queue.sync { resolved }
+    }
 
     /// Resolve the storage location ahead of time, on the background queue.
     ///
@@ -105,7 +126,7 @@ final class HistoryLogStore {
     /// `queue.sync` is safe rather than slow because `prepare()` has normally
     /// already resolved it; the sync is just a memory barrier at that point.
     var location: HistoryLogLocation {
-        queue.sync { resolved.location }
+        resolvedFromAnyThread.location
     }
 
     /// The directory the log is being written to, if there is a usable one.
@@ -119,7 +140,7 @@ final class HistoryLogStore {
     /// next to the log — never a licence to write into the log itself, which has
     /// exactly one owner and one serial queue.
     var directory: URL? {
-        queue.sync { resolved.directory }
+        resolvedFromAnyThread.directory
     }
 
     /// One month's log file, as the export screen needs it.
@@ -191,6 +212,33 @@ final class HistoryLogStore {
                 try self.write(line, to: date)
             } catch {
                 self.log.error("History append failed: %{public}@", String(describing: error))
+            }
+        }
+    }
+
+    /// Append several records with one file open per month instead of one per
+    /// record — a CGM backfill can deliver hundreds of readings at once.
+    func append<R: Encodable>(contentsOf records: [(record: R, date: Date)]) {
+        guard isEnabled, !records.isEmpty else { return }
+        queue.async { [weak self] in
+            guard let self else { return }
+            var byMonth = [String: (date: Date, data: Data)]()
+            for (record, date) in records {
+                do {
+                    var line = try self.encoder.encode(record)
+                    line.append(0x0A) // newline — the record separator
+                    let month = Self.monthFormatter.string(from: date)
+                    byMonth[month, default: (date, Data())].data.append(line)
+                } catch {
+                    self.log.error("History append failed: %{public}@", String(describing: error))
+                }
+            }
+            for (_, batch) in byMonth.sorted(by: { $0.key < $1.key }) {
+                do {
+                    try self.write(batch.data, to: batch.date)
+                } catch {
+                    self.log.error("History append failed: %{public}@", String(describing: error))
+                }
             }
         }
     }

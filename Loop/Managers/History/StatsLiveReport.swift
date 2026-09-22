@@ -112,6 +112,11 @@ final class StatsLiveReport: ObservableObject {
     private var hasStarted = false
     private var pollTimer: Timer?
 
+    /// No automatic refresh before this: the first one parses the whole history
+    /// log, and doing that while the app is still launching slows the launch down.
+    private static let launchDelay: TimeInterval = 30
+    private var automaticRefreshNotBefore: Date?
+
     private init() {
         isEnabled = UserDefaults.standard.bool(forKey: Self.enabledKey)
         let stamp = UserDefaults.standard.double(forKey: Self.lastWrittenKey)
@@ -161,7 +166,10 @@ final class StatsLiveReport: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
-        refresh()
+        automaticRefreshNotBefore = Date().addingTimeInterval(Self.launchDelay)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.launchDelay) { [weak self] in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
     }
 
     /// Whether there is enough charge to spend on this.
@@ -224,6 +232,8 @@ final class StatsLiveReport: ObservableObject {
     /// Rewrite the file, subject to the interval unless forced.
     func refresh(force: Bool = false) {
         guard isEnabled, !isRefreshing else { return }
+        // The didBecomeActive that every launch posts lands here too; the delayed call in `start()` covers it.
+        if !force, let notBefore = automaticRefreshNotBefore, Date() < notBefore { return }
         guard let url = fileURL else {
             lastError = NSLocalizedString("No folder to write to. Turn on the history log first.",
                                           comment: "Live report has nowhere to write")

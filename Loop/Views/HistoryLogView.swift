@@ -54,14 +54,22 @@ struct HistoryLogView: View {
     }()
 
     /// "2026-08" → "August 2026", falling back to the raw string.
-    private static func monthTitle(_ raw: String) -> String {
+    private static let monthParser: DateFormatter = {
         let parser = DateFormatter()
         parser.dateFormat = "yyyy-MM"
         parser.locale = Locale(identifier: "en_US_POSIX")
-        guard let date = parser.date(from: raw) else { return raw }
+        return parser
+    }()
+
+    private static let monthDisplay: DateFormatter = {
         let display = DateFormatter()
         display.dateFormat = "LLLL yyyy"
-        return display.string(from: date)
+        return display
+    }()
+
+    private static func monthTitle(_ raw: String) -> String {
+        guard let date = monthParser.date(from: raw) else { return raw }
+        return monthDisplay.string(from: date)
     }
 
     var body: some View {

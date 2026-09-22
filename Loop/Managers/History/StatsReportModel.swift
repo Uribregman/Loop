@@ -718,19 +718,41 @@ extension StatsReportModel {
         return String(format: NSLocalizedString("%1$d h %2$d min", comment: "Hours and minutes"), total / 60, total % 60)
     }
 
-    static func hourLabel(_ hour: Int) -> String {
-        var components = DateComponents()
-        components.hour = hour
+    /// "3am", "11pm" — built once; charts ask for these on every redraw.
+    private static let hourLabels: [String] = {
         let formatter = DateFormatter()
         formatter.dateFormat = "ha"
-        guard let date = Calendar.current.date(from: components) else { return "\(hour):00" }
-        return formatter.string(from: date).lowercased()
+        return (0..<24).map { hour in
+            var components = DateComponents()
+            components.hour = hour
+            guard let date = Calendar.current.date(from: components) else { return "\(hour):00" }
+            return formatter.string(from: date).lowercased()
+        }
+    }()
+
+    static func hourLabel(_ hour: Int) -> String {
+        hourLabels.indices.contains(hour) ? hourLabels[hour] : "\(hour):00"
     }
 
+    private static let shortWeekdaySymbols: [String] =
+        DateFormatter().shortWeekdaySymbols ?? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
     static func weekdayName(_ weekday: Int) -> String {
-        let symbols = DateFormatter().shortWeekdaySymbols ?? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        let symbols = shortWeekdaySymbols
         return symbols[max(0, min(symbols.count - 1, weekday - 1))]
     }
+
+    static let monthYearFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; return f
+    }()
+
+    static let dayOnlyFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "d"; return f
+    }()
+
+    static let dayMonthFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "d MMM"; return f
+    }()
 
     static let dayFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; return f

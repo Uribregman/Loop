@@ -1912,9 +1912,7 @@ struct HistoryStatisticsView: View {
         case .week:
             return Self.weekRangeLabel(point.start)
         case .month:
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MMMM yyyy"
-            return formatter.string(from: point.start)
+            return StatsReportModel.monthYearFormatter.string(from: point.start)
         }
     }
 
@@ -1928,10 +1926,8 @@ struct HistoryStatisticsView: View {
             return DateFormatter.localizedString(from: start, dateStyle: .medium, timeStyle: .none)
         }
         let last = calendar.date(byAdding: .day, value: -1, to: interval.end) ?? interval.end
-        let dayOnly = DateFormatter()
-        dayOnly.dateFormat = "d"
-        let dayMonth = DateFormatter()
-        dayMonth.dateFormat = "d MMM"
+        let dayOnly = StatsReportModel.dayOnlyFormatter
+        let dayMonth = StatsReportModel.dayMonthFormatter
         let sameMonth = calendar.isDate(start, equalTo: last, toGranularity: .month)
         let startText = sameMonth ? dayOnly.string(from: start) : dayMonth.string(from: start)
         return "\(startText) – \(dayMonth.string(from: last))"
@@ -2041,9 +2037,7 @@ struct HistoryStatisticsView: View {
     }
 
     static func weekdayName(_ weekday: Int) -> String {
-        let symbols = DateFormatter().shortWeekdaySymbols ?? ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
-        let index = max(0, min(symbols.count - 1, weekday - 1))
-        return symbols[index]
+        StatsReportModel.weekdayName(weekday)
     }
 
     // MARK: Behaviour → outcome
@@ -2753,12 +2747,7 @@ struct HistoryStatisticsView: View {
     }
 
     static func hourLabel(_ hour: Int) -> String {
-        var components = DateComponents()
-        components.hour = hour
-        let formatter = DateFormatter()
-        formatter.dateFormat = "ha"
-        guard let date = Calendar.current.date(from: components) else { return "\(hour):00" }
-        return formatter.string(from: date).lowercased()
+        StatsReportModel.hourLabel(hour)
     }
 
     private static func minutes(_ interval: TimeInterval) -> String {
