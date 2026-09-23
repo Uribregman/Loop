@@ -7,6 +7,117 @@ and `docs/DESIGN_SYSTEM.md` / `docs/PROCESS.md` for the standing rules.
 
 ---
 
+## 2026-09-23 (later) — Backup, 3-day statistics, Live Activity redesign
+
+**Backup:** the oldest full backup (iCloud `BuildLoop/Loop-260609-1904-backup.zip`,
+Aug 11) went to the Bin; replaced by `Loop-260609-1904-v3.14.8-2026-09-23.zip`
+(753 MB, 16,179 files, zip-tested) in the same folder.
+
+**Statistics:** new 3-day period ("3d", "3 days"). The picker is now two rows:
+3d · 7d · 14d · 30d over 60d · 90d · All. The full HTML report gets a 3d tab too.
+
+**Live Activity (Lock Screen chart + expanded Dynamic Island — one shared chart):**
+- Open design: no filled plot box, no grid; only an x axis line (bottom) and a y axis
+  line (beside the numbers), both dark blue #1E4FA8.
+- Colors: light mode unchanged. Dark mode slightly darker: green #2FA84F (the Statistics
+  Time in Range green) for in-range dots, loop ring and glucose number; red #D7372F,
+  orange #DB7F14, glucose blue #3E93E0, late-loop yellow #E0B800; target band 20 %,
+  override band 40 %. The Dynamic Island is always black, so it always uses the dark set.
+- Unchanged by design: y and x axis numbers, "mg/dL", and the change number top right.
+- Follow-up (owner couldn't see the dark-mode change): red #B8322B, orange #C46A10,
+  blue #2F7BC4, yellow #C9A300, bands 15 % / 30 % (green stays #2FA84F — measured on
+  screen exactly). Every axis number now has a solid dark-blue line across the whole
+  chart (0.75 pt) plus a short tick; the two axis lines stay 1.5 pt. Verified on both
+  simulators (Lock Screen + expanded Dynamic Island). On iOS 27 the hour numbers sit a
+  little right of their lines (centred on 26.5).
+- Second follow-up: the separate axis lines and the short ticks are gone; the grid lines
+  (every number, both directions) are 2 pt with round ends. The Lock Screen hides the
+  target-range band (override bands still show; the Dynamic Island keeps its faint band).
+  The small Dynamic Island no longer clips the trend arrow ("124-" → "124→", sized to its
+  text). Verified on 26.5 (small + expanded island, Lock Screen) and the iOS 27 Lock
+  Screen, where iOS 27 also draws an unlabeled hour line at the chart's right edge.
+- Third follow-up (owner: only 2 hours showing, should be 6; thicker lines, farther from
+  their numbers, running past the other lines): the chart always spans 6 hours
+  (`chartXScale` domain), a line at every full hour. Grid drawn by hand: 3 pt, round
+  ends, every line runs 6 pt past the outermost line it crosses, numbers 9 pt beyond.
+  Axis numbers drawn by hand too (Charts' axes hidden), so they sit exactly on their
+  lines on iOS 27 as well. Verified: 26.5 Lock Screen + small/expanded island, iOS 27
+  Lock Screen.
+- Fourth follow-up: the chart is centred. It takes exactly the room it draws in (the
+  lines' overhang + round end on the left, the widest y number on the right — an
+  invisible copy of the numbers sets that width), and the Lock Screen gap after the ring
+  is 20 pt (15 pt card margin + the ring stroke outside its frame). Readings/bands older
+  than the 6-hour window are no longer drawn outside the chart. Expanded island: ring
+  and glucose raised 10 pt, level with the change number. Closed island restored to
+  exactly the original code (only the color is the new palette), so the arrow may show
+  clipped ("124-") again as it did originally. Verified: 26.5 closed + expanded island
+  and Lock Screen, iOS 27 Lock Screen.
+- Fifth follow-up: grid lines dashed (3 pt, round ends, dash 4 / gap 8). Closed island:
+  tried letting the text take its full width, but the island keeps a fixed slot beside the camera
+  in the simulator, which clips "124→" to "124-". On the owner's phone the original code
+  shows "103→" fine (iOS on the phone widens the island), so the clipping is a simulator
+  quirk. Back to the exact original code, only the color from the palette. Verified dashed grid on the 26.5 and iOS 27 Lock Screens.
+- Sixth follow-up: grid lines 2 pt, system gray (was dark blue), longer dashes with
+  smaller gaps (dash 8 / gap 5 → ~10 pt dashes, ~3 pt gaps with the round ends).
+  Verified on the iOS 27 Lock Screen.
+- Seventh follow-up (owner: the raised ring looked cut off): expanded island ring + glucose
+  back in place (10 pt raise removed); the ring's frame is 44 pt (36 pt ring + its 8 pt
+  stroke) so the stroke stays inside the region, with the row at the top of it.
+  Verified on the 26.5 expanded island.
+- Eighth follow-up: expanded island change number + unit lowered to the ring's row
+  (trailing region 44 pt tall, centred), so ring, glucose and change sit on one line.
+  Verified on the 26.5 expanded island.
+- `LiveActivityPalette` + `LiveActivityPaletteReader` live in ChartView.swift.
+
+**Large/Small Lock Screen setting removed** (owner: "bullshit, delete them"): the
+Lock Screen always shows the chart; the fork's small readout layout was deleted. The
+`mode` field stays in Loop's settings/attributes so saved data still decodes; a saved
+"Small" is ignored.
+
+Verified in the iOS 27.0 and 26.5 simulators: build OK; 3d shows "last 3 days — 2 days
+of it have data"; two-row picker; Lock Screen and expanded Dynamic Island show the open
+chart with blue axis lines and the darker green. NOT verified: the light-mode rendering
+of the Lock Screen activity (iOS drew it in its dark style over both simulator wallpapers;
+the light colors are the original ones, unchanged in code), the phone. Not committed.
+
+---
+
+## 2026-09-23 — Updated to Loop 3.14.8, keeping every fork change
+
+Committed first (with the owner's OK): the uncommitted Profiles / pills /
+speed-up work — Loop 397288cf, LoopKit f28d6163, NightscoutService 190be83.
+Snapshot of the whole workspace before the update:
+`~/Developer/Loop/BuildLoop/Loop-260609-1904/LoopWorkspace-before-3.14.8` (APFS clone).
+
+Then merged upstream LoopWorkspace v3.14.8 (workspace 181bf0c, version 3.14.8 (57)):
+- **Loop** (ee4e474e): took the weekly dev-branch warning, build-details script fix,
+  translations. Kept the fork's version of everything visual and its own iOS 27
+  scene lifecycle — owner: "the restyle we did together are kept, don't let the public
+  version change that". Rejected upstream's toolbar/Liquid Glass/icon/alert-style
+  commits and its SceneDelegate (which moves manager start-up into the scene).
+  LiveActivityManager: the fork already had the same deadlock fix (+ retries).
+- **OmnipodKit** (15f2a601): merged; one conflict, took upstream's line that also
+  notifies on silence-pod changes. Pod keep-alive "When Open" default, O5 silence-beep
+  changes, eager-connect watchdog come in.
+- **LoopKit** (b99e7f06): translations + tests only — algorithm unchanged.
+- G7SensorKit, NightscoutService (APNS production flag + fork's profile name),
+  LoopOnboarding: clean merges. CGMBLEKit, dexcom-share, RileyLinkKit, MinimedKit,
+  LibreTransmitter, NightscoutRemoteCGM, MedtrumKit (70 commits), EversenseKit (23),
+  LogglyService, TidepoolService: moved forward (TidepoolService keeps the local
+  signing edits, uncommitted as before).
+- NightscoutKit package pinned to 4ec9fd1 in both workspaces (needed by NightscoutService).
+- The fork's own app icon kept.
+
+Verified: full build OK; iOS 27.0 and 26.5 simulators show "Loop v3.14.8 (57)", same
+home screen/toolbar/icons, Therapy Settings with profiles intact; loading "Sick Day"
+sent the basal schedule to the mock pump (2:00 0.15 → 0.05); Statistics OK; no crash
+reports. Profile A was correctly refused (max bolus 5.15 U isn't a 0.1 U step of the
+simulated pump). NOT verified: the phone / a real pod, Medtrum/Eversense/Libre hardware.
+iCloud copy brought to the same commits (its uncommitted Xcode-generated noise saved as
+patches in the session scratchpad first).
+
+---
+
 ## 2026-09-23 — Six speed-ups in this fork's own code
 
 1. Custom alarms: `CustomAlertSettings.load()` ran on every CGM reading and reservoir

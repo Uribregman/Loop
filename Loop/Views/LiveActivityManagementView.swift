@@ -32,32 +32,6 @@ struct LiveActivityManagementView: View {
                     Text("Shows a live glucose activity on your Lock Screen, in the Dynamic Island (the pill around the front camera on iPhone 14 Pro and later), and on CarPlay. It updates automatically as new readings arrive. Tap and hold the Dynamic Island to expand it.", comment: "Explanation of the live activity master toggle")
                 }
 
-                Section {
-                    ExpandableSetting(
-                        isEditing: $viewModel.isEditingMode,
-                        leadingValueContent: {
-                            Text(NSLocalizedString("Mode", comment: "Title for mode live activity toggle"))
-                                .foregroundStyle(viewModel.isEditingMode ? .blue : .primary)
-                        },
-                        trailingValueContent: {
-                            Text(viewModel.mode.name())
-                                .foregroundStyle(viewModel.isEditingMode ? .blue : .primary)
-                        },
-                        expandedContent: {
-                            ResizeablePicker(selection: self.$viewModel.mode.animation(),
-                                             data: LiveActivityMode.all,
-                                             formatter: { $0.name() })
-                        }
-                    )
-                    .onChange(of: viewModel.mode) { _ in
-                        self.isDirty = previousViewModel.mode != viewModel.mode
-                    }
-                } header: {
-                    Text("Lock Screen Layout")
-                } footer: {
-                    Text("“Large” shows a full glucose chart on the Lock Screen; “Small” shows a compact single-line summary. This only affects the Lock Screen — the Dynamic Island and CarPlay layouts are fixed.", comment: "Explanation of the live activity mode picker")
-                }
-
             }
             .animation(.easeInOut, value: UUID())
             .insetGroupedListStyle()
@@ -88,7 +62,8 @@ struct LiveActivityManagementView: View {
     private func save() {
         var settings = UserDefaults.standard.liveActivity ?? LiveActivitySettings()
         settings.enabled = viewModel.enabled
-        settings.mode = viewModel.mode
+        // The Large/Small layout choice was removed: the Lock Screen always shows the chart.
+        settings.mode = .large
         settings.addPredictiveLine = viewModel.addPredictiveLine
         settings.useLimits = viewModel.useLimits
         settings.upperLimitChartMmol = viewModel.upperLimitChartMmol

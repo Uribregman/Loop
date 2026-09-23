@@ -25,13 +25,14 @@ import LoopKitUI
 @MainActor
 final class HistoryStatisticsViewModel: ObservableObject {
     enum Period: String, CaseIterable, Identifiable {
-        case week, fortnight, month, twoMonths, quarter, all
+        case threeDays, week, fortnight, month, twoMonths, quarter, all
         var id: String { rawValue }
 
-        /// Deliberately compact ("7d", not "7 Days"): six chips have to fit one
-        /// row on the narrowest phone without wrapping or truncating.
+        /// Deliberately compact ("7d", not "7 Days") so each row of the picker
+        /// fits the narrowest phone without wrapping or truncating.
         var title: String {
             switch self {
+            case .threeDays: return NSLocalizedString("3d", comment: "Statistics period: 3 days")
             case .week:      return NSLocalizedString("7d", comment: "Statistics period: 7 days")
             case .fortnight: return NSLocalizedString("14d", comment: "Statistics period: 14 days")
             case .month:     return NSLocalizedString("30d", comment: "Statistics period: 30 days")
@@ -44,6 +45,7 @@ final class HistoryStatisticsViewModel: ObservableObject {
         /// Spelled out, for the scope caption under the picker.
         var longTitle: String {
             switch self {
+            case .threeDays: return NSLocalizedString("3 days", comment: "Period, spelled out")
             case .week:      return NSLocalizedString("7 days", comment: "Period, spelled out")
             case .fortnight: return NSLocalizedString("14 days", comment: "Period, spelled out")
             case .month:     return NSLocalizedString("30 days", comment: "Period, spelled out")
@@ -55,6 +57,7 @@ final class HistoryStatisticsViewModel: ObservableObject {
 
         var days: Int? {
             switch self {
+            case .threeDays: return 3
             case .week: return 7
             case .fortnight: return 14
             case .month: return 30
@@ -927,26 +930,40 @@ struct HistoryStatisticsView: View {
 
     // MARK: Period
 
-    /// Six chips (7d…All) on one row. Spacing is tight on purpose — at 8pt the
-    /// row overflowed on the narrowest phone once 7d/14d/60d were added.
+    /// Seven periods on two rows: the short ones (3d…30d) on top, the long
+    /// ones (60d, 90d, All) below. One row of seven no longer fit the
+    /// narrowest phone once 3d was added.
+    private static let periodRows: [[HistoryStatisticsViewModel.Period]] = [
+        [.threeDays, .week, .fortnight, .month],
+        [.twoMonths, .quarter, .all],
+    ]
+
     private var periodPicker: some View {
-        HStack(spacing: 5) {
-            ForEach(HistoryStatisticsViewModel.Period.allCases) { period in
-                let isSelected = viewModel.period == period
-                Button { viewModel.period = period } label: {
-                    Text(period.title)
-                        .font(.subheadline.weight(isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? .primary : .secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+        VStack(spacing: 8) {
+            ForEach(Self.periodRows.indices, id: \.self) { row in
+                HStack(spacing: 8) {
+                    ForEach(Self.periodRows[row]) { period in
+                        periodChip(period)
+                    }
                 }
-                .buttonStyle(GlassButtonStyle(
-                    isSelected ? .regular.tint(Color.loopSelectionTint).interactive() : .regular.interactive(),
-                    in: Capsule()))
             }
         }
+    }
+
+    private func periodChip(_ period: HistoryStatisticsViewModel.Period) -> some View {
+        let isSelected = viewModel.period == period
+        return Button { viewModel.period = period } label: {
+            Text(period.title)
+                .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+        }
+        .buttonStyle(GlassButtonStyle(
+            isSelected ? .regular.tint(Color.loopSelectionTint).interactive() : .regular.interactive(),
+            in: Capsule()))
     }
 
     /// Says, in one line, exactly what the numbers below cover.

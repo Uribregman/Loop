@@ -89,11 +89,22 @@ struct GlucoseLiveActivityConfiguration: Widget {
     private func fullLockScreenView(
         context: ActivityViewContext<GlucoseActivityAttributes>
     ) -> some View {
+        LiveActivityPaletteReader { palette in
+            fullLockScreenContent(context: context, palette: palette)
+        }
+    }
+
+    @ViewBuilder
+    private func fullLockScreenContent(
+        context: ActivityViewContext<GlucoseActivityAttributes>,
+        palette: LiveActivityPalette
+    ) -> some View {
         ZStack {
             VStack {
-                if context.attributes.mode == .large {
-                    HStack(spacing: 15) {
-                        loopIcon(context)
+                    // 15 pt like the card's own margin, plus the part of the ring's stroke
+                    // that falls outside its frame, so the chart sits centred beside the ring.
+                    HStack(spacing: 20) {
+                        loopIcon(context, palette: palette)
                         if context.attributes.addPredictiveLine {
                             ChartView(
                                 glucoseSamples: context.state.glucoseSamples,
@@ -114,6 +125,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
                                 preset: context.state.preset,
                                 yAxisMarks: context.state.yAxisMarks
                             )
+                            .hidingTargetBand()
                             .frame(height: 85)
                         } else {
                             ChartView(
@@ -129,13 +141,10 @@ struct GlucoseLiveActivityConfiguration: Widget {
                                 preset: context.state.preset,
                                 yAxisMarks: context.state.yAxisMarks
                             )
+                            .hidingTargetBand()
                             .frame(height: 85)
                         }
                     }
-                } else {
-                    // Small mode has no chart — show a prominent glucose readout instead.
-                    smallModeGlucoseHeader(context: context)
-                }
 
                 HStack {
                     bottomSpacer(border: false)
@@ -166,7 +175,8 @@ struct GlucoseLiveActivityConfiguration: Widget {
                             bottomItemCurrentBG(
                                 value: item.value,
                                 trend: item.trend,
-                                context: context
+                                context: context,
+                                palette: palette
                             )
                         }
                         
@@ -207,6 +217,16 @@ struct GlucoseLiveActivityConfiguration: Widget {
     private func compactLockScreenView(
         context: ActivityViewContext<GlucoseActivityAttributes>
     ) -> some View {
+        LiveActivityPaletteReader { palette in
+            compactLockScreenContent(context: context, palette: palette)
+        }
+    }
+
+    @ViewBuilder
+    private func compactLockScreenContent(
+        context: ActivityViewContext<GlucoseActivityAttributes>,
+        palette: LiveActivityPalette
+    ) -> some View {
         let glucoseFormatter = NumberFormatter.glucoseFormatter(
             for: context.state.isMmol
                 ? HKUnit.millimolesPerLiter
@@ -216,12 +236,12 @@ struct GlucoseLiveActivityConfiguration: Widget {
             ? HKUnit.millimolesPerLiter.localizedShortUnitString
             : HKUnit.milligramsPerDeciliter.localizedShortUnitString
         
-        let glucoseColor = !context.attributes.useLimits ? .primary : getGlucoseColor(context: context)
+        let glucoseColor = !context.attributes.useLimits ? .primary : getGlucoseColor(context: context, palette: palette)
         let currentBG = (glucoseFormatter.string(from: context.state.currentGlucose) ?? "??") + getArrowImage(context.state.trendType)
         let eventualBG = formatEventualBG(value: context.state.eventualGlucose, formatter: glucoseFormatter)
         
         HStack(spacing: 10) {
-            loopIcon(context, size: 24)
+            loopIcon(context, palette: palette, size: 24)
             
             HStack(alignment: .top) {
                 VStack(alignment: .leading) {
@@ -252,40 +272,6 @@ struct GlucoseLiveActivityConfiguration: Widget {
         .background(Color.clear)
     }
     
-    /// Compact glucose readout shown in "Small" lock-screen mode (which has no
-    /// chart): current glucose + trend arrow, plus the change since the last reading.
-    @ViewBuilder
-    private func smallModeGlucoseHeader(
-        context: ActivityViewContext<GlucoseActivityAttributes>
-    ) -> some View {
-        let glucoseFormatter = NumberFormatter.glucoseFormatter(
-            for: context.state.isMmol ? HKUnit.millimolesPerLiter : HKUnit.milligramsPerDeciliter
-        )
-        let unit = context.state.isMmol
-            ? HKUnit.millimolesPerLiter.localizedShortUnitString
-            : HKUnit.milligramsPerDeciliter.localizedShortUnitString
-        let glucoseColor = !context.attributes.useLimits ? Color.primary : getGlucoseColor(context: context)
-        let currentBG = (glucoseFormatter.string(from: context.state.currentGlucose) ?? "??") + getArrowImage(context.state.trendType)
-
-        HStack(spacing: 10) {
-            loopIcon(context, size: 26)
-            Text(currentBG)
-                .font(.title3)
-                .bold()
-                .foregroundStyle(glucoseColor)
-            Spacer()
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(context.state.delta + " " + unit)
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                Text("since last reading", comment: "Caption under the glucose delta in the small Live Activity")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .privacySensitive()
-    }
-
     private func formatEventualBG(value: Double?, formatter: NumberFormatter) -> String {
         guard let value = value else {
             return "??"
@@ -307,13 +293,15 @@ struct GlucoseLiveActivityConfiguration: Widget {
         return DynamicIsland {
             DynamicIslandExpandedRegion(.leading) {
                 HStack(alignment: .center) {
-                    loopIcon(context)
-                        .frame(width: 40, height: 40, alignment: .trailing)
+                    // 44 pt: the ring (36 pt) plus its 8 pt stroke, so the stroke stays inside the
+                    // region (anything outside it can be cut off) while the row sits as high as it can.
+                    loopIcon(context, palette: .dark)
+                        .frame(width: 44, height: 44, alignment: .trailing)
                     Spacer()
                     Text(
                         "\(glucoseFormatter.string(from: context.state.currentGlucose) ?? "??")\(getArrowImage(context.state.trendType))"
                     )
-                    .foregroundStyle(getGlucoseColor(context: context))
+                    .foregroundStyle(getGlucoseColor(context: context, palette: .dark))
                     .font(.headline)
                     .fontWeight(.heavy)
                 }
@@ -332,6 +320,8 @@ struct GlucoseLiveActivityConfiguration: Widget {
                     .foregroundStyle(Color(white: 0.7))
                     .font(.subheadline)
                 }
+                // Same height as the ring's row on the left, so both are centred on one line.
+                .frame(height: 44)
             }
             DynamicIslandExpandedRegion(.bottom) {
                 if context.attributes.addPredictiveLine {
@@ -351,6 +341,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
                         preset: context.state.preset,
                         yAxisMarks: context.state.yAxisMarks
                     )
+                    .alwaysDarkPalette()
                     .frame(height: 75)
                 } else {
                     ChartView(
@@ -366,6 +357,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
                         preset: context.state.preset,
                         yAxisMarks: context.state.yAxisMarks
                     )
+                    .alwaysDarkPalette()
                     .frame(height: 75)
                 }
             }
@@ -374,7 +366,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
                 "\(glucoseFormatter.string(from: context.state.currentGlucose) ?? "??")\(getArrowImage(context.state.trendType))"
             )
             .foregroundStyle(
-                getGlucoseColor(context: context)
+                getGlucoseColor(context: context, palette: .dark)
             )
             .minimumScaleFactor(0.1)
         } compactTrailing: {
@@ -387,7 +379,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
                     ?? "??"
             )
             .foregroundStyle(
-                getGlucoseColor(context: context)
+                getGlucoseColor(context: context, palette: .dark)
             )
             .minimumScaleFactor(0.1)
         }
@@ -396,11 +388,12 @@ struct GlucoseLiveActivityConfiguration: Widget {
     @ViewBuilder
     private func loopIcon(
         _ context: ActivityViewContext<GlucoseActivityAttributes>,
+        palette: LiveActivityPalette,
         size: CGFloat = 36
     ) -> some View {
         Circle()
             .trim(from: context.state.isCloseLoop ? 0 : 0.2, to: 1)
-            .stroke(getLoopColor(context.state.lastCompleted), lineWidth: size/4.5)
+            .stroke(getLoopColor(context.state.lastCompleted, palette: palette), lineWidth: size/4.5)
             .rotationEffect(Angle(degrees: -126))
             .frame(width: size, height: size)
     }
@@ -424,7 +417,8 @@ struct GlucoseLiveActivityConfiguration: Widget {
     private func bottomItemCurrentBG(
         value: String,
         trend: GlucoseTrend?,
-        context: ActivityViewContext<GlucoseActivityAttributes>
+        context: ActivityViewContext<GlucoseActivityAttributes>,
+        palette: LiveActivityPalette
     ) -> some View {
         VStack(alignment: .center) {
             HStack {
@@ -433,7 +427,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
                     .foregroundStyle(
                         !context.attributes.useLimits
                             ? .primary
-                            : getGlucoseColor(context: context)
+                            : getGlucoseColor(context: context, palette: palette)
                     )
                     .fontWeight(.heavy)
                     .font(Font.body.leading(.tight))
@@ -446,7 +440,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
         context: ActivityViewContext<GlucoseActivityAttributes>
     ) -> some View {
         VStack(alignment: .center) {
-            loopIcon(context)
+            loopIcon(context, palette: .forScheme(.light))
         }
     }
 
@@ -482,7 +476,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
         }
     }
 
-    private func getLoopColor(_ age: Date?) -> Color {
+    private func getLoopColor(_ age: Date?, palette: LiveActivityPalette) -> Color {
         var freshness: LoopCompletionFreshness = .stale
         if let age = age {
             freshness = LoopCompletionFreshness(
@@ -492,15 +486,15 @@ struct GlucoseLiveActivityConfiguration: Widget {
 
         switch freshness {
         case .fresh:
-            return Color("fresh")
+            return palette.fresh
         case .aging:
-            return Color("warning")
+            return palette.warning
         case .stale:
-            return .red
+            return palette.stale
         }
     }
 
-    private func getGlucoseColor(context: ActivityViewContext<GlucoseActivityAttributes>) -> Color {
+    private func getGlucoseColor(context: ActivityViewContext<GlucoseActivityAttributes>, palette: LiveActivityPalette) -> Color {
         guard context.attributes.useLimits else {
             return .primary
         }
@@ -511,7 +505,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
             || !context.state.isMmol
                 && value < context.attributes.lowerLimitChartMg
         {
-            return .red
+            return palette.belowRange
         }
 
         if context.state.isMmol
@@ -519,10 +513,10 @@ struct GlucoseLiveActivityConfiguration: Widget {
             || !context.state.isMmol
                 && value > context.attributes.upperLimitChartMg
         {
-            return .orange
+            return palette.aboveRange
         }
 
-        return .green
+        return palette.inRange
     }
     
 
