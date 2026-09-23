@@ -747,7 +747,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
         toolbarItems![ToolbarIndex.bolus].isEnabled = isPumpOnboarded
         toolbarItems![ToolbarIndex.bolus].tintColor = UIColor.insulinTintColor
         toolbarItems![ToolbarIndex.settings].accessibilityLabel = NSLocalizedString("Settings", comment: "The label of the settings button")
-        toolbarItems![ToolbarIndex.settings].tintColor = UIColor.secondaryLabel
+        // Solid gray: .secondaryLabel is see-through and faded into iOS 27's dark toolbar.
+        toolbarItems![ToolbarIndex.settings].tintColor = UIColor.systemGray
 
         toolbarItems![ToolbarIndex.statistics].isEnabled = true
         // Rebuilt rather than mutated so the menu picks up the current pre-meal

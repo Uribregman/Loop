@@ -69,6 +69,9 @@ Aug 11) went to the Bin; replaced by `Loop-260609-1904-v3.14.8-2026-09-23.zip`
   Verified on the 26.5 expanded island.
 - `LiveActivityPalette` + `LiveActivityPaletteReader` live in ChartView.swift.
 
+**Settings gear (main screen toolbar):** solid system gray instead of `.secondaryLabel`
+(see-through; it faded into iOS 27's dark toolbar). Verified in iOS 27 dark mode. Committed.
+
 **Large/Small Lock Screen setting removed** (owner: "bullshit, delete them"): the
 Lock Screen always shows the chart; the fork's small readout layout was deleted. The
 `mode` field stays in Loop's settings/attributes so saved data still decodes; a saved
