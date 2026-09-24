@@ -7,6 +7,26 @@ and `docs/DESIGN_SYSTEM.md` / `docs/PROCESS.md` for the standing rules.
 
 ---
 
+## 2026-09-24 — G7: recover from a stuck handshake (2026-09-24). Committed.
+
+Owner's report (Loop issue report, 03:07): Loop lost the G7 for 70 min (Sept 23,
+00:09–01:19) and 75 min (Sept 24, 01:49–03:04) while the Dexcom app had every reading.
+Log: the sensor connected every 5 minutes, but enabling notifications failed each time
+("Error enabling notification for authentication: unknownCharacteristic" / "timeout").
+That is not a suspected session end, so nothing reset the connection; readings came back
+only after the sensor was forgotten and found again. The owner also entered finger-sticks
+in Apple Health, which Loop used (wasUserEntered, com.apple.Health).
+
+G7SensorKit (CGM connection only, no dosing code):
+- G7CGMManager counts connections in a row whose notification setup fails
+  (`G7SensorError.controlError`), once per connection window (errors < 60 s apart count
+  once). A reading resets it; not counted while already scanning for a sensor.
+- After 2 (≈10 min): `G7Sensor.reconnectToSensor()` drops the connection and finds the
+  same sensor again, keeping `sensorID` (never adopts another sensor).
+- After 4: `scanForNewSensor()` — forget and rescan, the path that fixed it in the field.
+- 6 new unit tests in G7CGMManagerTests; all 19 pass in the iOS 26.5 simulator.
+NOT verified: Bluetooth behaviour on the phone (the simulator has no Bluetooth).
+
 ## 2026-09-23 (later) — Backup, 3-day statistics, Live Activity redesign
 
 **Backup:** the oldest full backup (iCloud `BuildLoop/Loop-260609-1904-backup.zip`,
