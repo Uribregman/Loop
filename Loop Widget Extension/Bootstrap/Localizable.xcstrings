@@ -1757,9 +1757,6 @@
         }
       }
     },
-    "since last reading" : {
-      "comment" : "Caption under the glucose delta in the small Live Activity"
-    },
     "Start" : {
       "localizations" : {
         "de" : {
