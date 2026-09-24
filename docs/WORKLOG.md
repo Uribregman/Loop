@@ -25,6 +25,11 @@ and `docs/DESIGN_SYSTEM.md` / `docs/PROCESS.md` for the standing rules.
   inside the Time In Range card. The "needs 70% sensor data" note is its bottom line.
   Its trophy is an outline in the text colour (no colour of its own).
 - Verified in the iOS 26.5 simulator (best card, note, chart, scrolling readout).
+- Week chart follow-up (owner: can't scroll to the end; add day markers): half a day of
+  room at each end so the middle line reaches the first and the latest reading; opens
+  with the middle on now. Day markers: a line at each midnight and "Wed 23" in a second
+  row under the hours, starting at that line. Middle line 2 pt and darker than the day
+  lines. Verified on 26.5 (opens on the latest reading, scrolls to the first). Committed.
 
 ## 2026-09-24 — G7: recover from a stuck handshake (2026-09-24). Committed.
 

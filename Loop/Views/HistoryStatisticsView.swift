@@ -2881,8 +2881,8 @@ struct GlucoseWeekChartView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var points: [HistoryStatisticsViewModel.GlucosePoint]?
-    /// Leading edge of the visible 24 hours.
-    @State private var scrollPosition = Date().addingTimeInterval(-Self.visibleLength)
+    /// Leading edge of the visible 24 hours. Opens with the middle line on now.
+    @State private var scrollPosition = Date().addingTimeInterval(-Self.visibleLength / 2)
 
     private static let visibleLength: TimeInterval = 24 * 60 * 60
     /// A reading further than this from the middle line is not "at" it.
@@ -2895,6 +2895,12 @@ struct GlucoseWeekChartView: View {
         return calendar.date(byAdding: .day, value: -6, to: today) ?? today.addingTimeInterval(-6 * 86400)
     }()
     private let end = Date()
+
+    /// Half a window of room at each end, so the middle line can reach the first
+    /// and the latest reading rather than stopping 12 hours short of them.
+    private var domain: ClosedRange<Date> {
+        start.addingTimeInterval(-Self.visibleLength / 2)...end.addingTimeInterval(Self.visibleLength / 2)
+    }
 
     var body: some View {
         NavigationStack {
@@ -2976,7 +2982,7 @@ struct GlucoseWeekChartView: View {
         let top = max(300, ((points.map(\.mgdl).max() ?? 0) / 50).rounded(.up) * 50)
         let selected = reading(at: middle, in: points)
         return Chart {
-            RectangleMark(xStart: .value("Start", start), xEnd: .value("End", end),
+            RectangleMark(xStart: .value("Start", domain.lowerBound), xEnd: .value("End", domain.upperBound),
                           yStart: .value("Low", 70), yEnd: .value("High", 180))
                 .foregroundStyle(GlucoseBandColor.inRange.opacity(0.12))
 
@@ -2989,8 +2995,8 @@ struct GlucoseWeekChartView: View {
             // The middle line: its date follows the scroll position, so it stays
             // in the middle of the visible 24 hours while the chart moves.
             RuleMark(x: .value("Middle", middle))
-                .lineStyle(StrokeStyle(lineWidth: 1.5))
-                .foregroundStyle(Color.primary.opacity(0.45))
+                .lineStyle(StrokeStyle(lineWidth: 2))
+                .foregroundStyle(Color.primary.opacity(0.75))
 
             if let selected {
                 PointMark(x: .value("Time", selected.date), y: .value("Glucose", selected.mgdl))
@@ -2998,7 +3004,7 @@ struct GlucoseWeekChartView: View {
                     .foregroundStyle(Self.color(for: selected.mgdl))
             }
         }
-        .chartXScale(domain: start...max(end, start.addingTimeInterval(Self.visibleLength)))
+        .chartXScale(domain: domain)
         .chartYScale(domain: 40...top)
         .chartScrollableAxes(.horizontal)
         .chartXVisibleDomain(length: Self.visibleLength)
@@ -3007,6 +3013,16 @@ struct GlucoseWeekChartView: View {
             AxisMarks(values: .stride(by: .hour, count: 3)) { value in
                 AxisGridLine()
                 AxisValueLabel(format: .dateTime.hour())
+            }
+            // Day markers: a stronger line at each midnight and the day's name in a
+            // second row under the hours, starting at that line (a label centred on
+            // its day would be cut off whenever the middle of the day is off screen).
+            AxisMarks(values: .stride(by: .day)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1))
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+                AxisValueLabel(format: .dateTime.weekday(.abbreviated).day(), verticalSpacing: 22)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.primary)
             }
         }
         .chartYAxis {
