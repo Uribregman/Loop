@@ -7,6 +7,25 @@ and `docs/DESIGN_SYSTEM.md` / `docs/PROCESS.md` for the standing rules.
 
 ---
 
+## 2026-09-24 — Statistics: best time in range, 7-day glucose chart (2026-09-24). Committed.
+
+- Best time in range: for each period (3–90 days) the Time In Range card shows the
+  best run of that many consecutive calendar days in all history ("Best 7 days: 84%
+  · 3–9 Sep"), or "Your best 7 days so far" when the period on screen is the best.
+  Same 70–180 rule and de-duplication as the rest of the screen; a run needs ≥ 70% of
+  its possible readings (288/day). Computed once at load for all periods
+  (`HistoryStatistics.bestTimeInRange`). Hidden for "All". When the period on screen
+  scores higher but has too little data, a caption explains the 70% rule.
+- Top-left chart button in Statistics opens "Last 7 Days": 24 hours visible, scrolls
+  sideways through today and the 6 days before; a fixed middle line with the reading
+  under it (value, colour by band, date and time) shown above the chart; 70–180 band;
+  7-day time in range and average below.
+- Owner follow-up: the best is its own full-width card in the key-number style (same
+  height, corners and look as the square cards), right below them, instead of a pill
+  inside the Time In Range card. The "needs 70% sensor data" note is its bottom line.
+  Its trophy is an outline in the text colour (no colour of its own).
+- Verified in the iOS 26.5 simulator (best card, note, chart, scrolling readout).
+
 ## 2026-09-24 — G7: recover from a stuck handshake (2026-09-24). Committed.
 
 Owner's report (Loop issue report, 03:07): Loop lost the G7 for 70 min (Sept 23,

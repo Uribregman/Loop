@@ -90,6 +90,34 @@ final class HistoryStatisticsViewModel: ObservableObject {
     /// granularities are computed once at load so the picker is instant.
     @Published private(set) var weeklyComparison: [HistoryStatistics.PeriodPoint] = []
     @Published private(set) var monthlyComparison: [HistoryStatistics.PeriodPoint] = []
+    /// Best time in range ever, per period length in days, from EVERY line.
+    @Published private(set) var bestTimeInRange: [Int: HistoryStatistics.BestTimeInRange] = [:]
+
+    struct GlucosePoint {
+        let date: Date
+        let mgdl: Double
+    }
+
+    /// Glucose readings from `start` on, oldest first, for the week chart.
+    func glucose(since start: Date) async -> [GlucosePoint] {
+        let lines = allLines
+        return await Task.detached(priority: .userInitiated) {
+            let recent = lines.filter { line in
+                line.t == "glucose" && (line.date.map { $0 >= start } ?? false)
+            }
+            return HistoryLineDeduplicator.deduplicated(recent)
+                .compactMap { line -> GlucosePoint? in
+                    guard let date = line.date, let mgdl = line.mgdl else { return nil }
+                    return GlucosePoint(date: date, mgdl: mgdl)
+                }
+                .sorted { $0.date < $1.date }
+        }.value
+    }
+
+    /// Best time in range over any run as long as the selected period; nil for "All".
+    var bestTimeInRangeForPeriod: HistoryStatistics.BestTimeInRange? {
+        period.days.flatMap { bestTimeInRange[$0] }
+    }
 
     func comparison(_ granularity: HistoryStatistics.PeriodGranularity) -> [HistoryStatistics.PeriodPoint] {
         switch granularity {
@@ -130,8 +158,11 @@ final class HistoryStatisticsViewModel: ObservableObject {
             // Both granularities up front, still off the main thread.
             let weekly = HistoryStatistics.periodSummary(from: lines, granularity: .week)
             let monthly = HistoryStatistics.periodSummary(from: lines, granularity: .month)
+            let best = HistoryStatistics.bestTimeInRange(from: lines,
+                                                         windowDays: Period.allCases.compactMap(\.days))
             await MainActor.run {
                 self?.allLines = lines
+                self?.bestTimeInRange = best
                 self?.insights = computed
                 self?.weeklyComparison = weekly
                 self?.monthlyComparison = monthly
@@ -364,6 +395,7 @@ struct HistoryStatisticsView: View {
     /// clears it.
     @State private var sharePayload: StatsSharePayload?
     @State private var shareFailed = false
+    @State private var showsWeekChart = false
 
     /// Which big tiles are expanded. Collapsed is the DEFAULT for the heavy ones:
     /// the screen was a continuous wall of charts you had to scroll past to find
@@ -603,6 +635,13 @@ struct HistoryStatisticsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .loopSoftTopEdge()
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showsWeekChart = true } label: {
+                    Image(systemName: "chart.xyaxis.line")
+                }
+                .accessibilityLabel(Text("Glucose, last 7 days", comment: "Button that opens the week glucose chart"))
+                .disabled(!viewModel.hasLoadedOnce)
+            }
             // Same shape as every other Done in the app (AI settings, custom
             // alerts): trailing confirmationAction, plain semibold text.
             if showsDoneButton {
@@ -634,6 +673,9 @@ struct HistoryStatisticsView: View {
         }
         .sheet(item: $sharePayload) { payload in
             StatsActivityView(items: payload.activityItems)
+        }
+        .sheet(isPresented: $showsWeekChart) {
+            GlucoseWeekChartView(viewModel: viewModel)
         }
         .alert(NSLocalizedString("Could not prepare the share", comment: "Share failure title"),
                isPresented: $shareFailed) {
@@ -673,6 +715,7 @@ struct HistoryStatisticsView: View {
             timeInRangeTile
             observationsTile
             keyNumbersRow
+            bestTimeInRangeTile
         })
     }
 
@@ -1086,6 +1129,59 @@ struct HistoryStatisticsView: View {
             }
         }
     }
+
+    /// Best time in range over any run of days as long as the selected period, as a
+    /// full-width key-number card. Hidden for "All", which has nothing to compare against.
+    @ViewBuilder
+    private var bestTimeInRangeTile: some View {
+        if let best = viewModel.bestTimeInRangeForPeriod {
+            // Runs end on whole days and a tie goes to the most recent, so the best
+            // run ending today IS the period on screen.
+            let isCurrent = Calendar.current.isDateInToday(best.lastDay)
+            let dates = Self.bestRangeFormatter.string(from: best.firstDay, to: best.lastDay)
+            // The period on screen scores higher but has too few readings to count.
+            let tooLittleData = !isCurrent
+                && (viewModel.stats.glucose.inRange * 100).rounded() > (best.fraction * 100).rounded()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    // Outline only, in the text colour: no colour of its own.
+                    Image(systemName: "trophy")
+                        .foregroundStyle(.primary)
+                    Text(String(format: NSLocalizedString("Best %@", comment: "Best TIR card title (1: period, e.g. 7 Days)"),
+                                viewModel.period.longTitle.localizedCapitalized))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption)
+                Text(Self.percent(best.fraction))
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Group {
+                    if isCurrent {
+                        Text("Right now — your best so far", comment: "Best TIR card: the period on screen is the best")
+                    } else if tooLittleData {
+                        Text(String(format: NSLocalizedString("%1$@ · this period needs %2$@ sensor data to count", comment: "Best TIR card: dates, and why the higher period on screen does not count (2: e.g. 70%)"),
+                                    dates, Self.percent(HistoryStatistics.bestTimeInRangeMinimumCoverage)))
+                    } else {
+                        Text(dates)
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .loopExportableTileBackground(isExporting)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private static let bestRangeFormatter: DateIntervalFormatter = {
+        let formatter = DateIntervalFormatter()
+        formatter.dateTemplate = "dMMM"
+        return formatter
+    }()
 
     private func changeBadge(_ change: Double) -> some View {
         let improving = change > 0
@@ -2772,5 +2868,182 @@ struct HistoryStatisticsView: View {
         if total < 60 { return String(format: NSLocalizedString("%d min", comment: "Minutes"), total) }
         return String(format: NSLocalizedString("%1$d h %2$d min", comment: "Hours and minutes"),
                       total / 60, total % 60)
+    }
+}
+
+// MARK: - Week glucose chart
+
+/// The last 7 days of glucose, 24 hours at a time. Scroll sideways through the
+/// week; the line in the middle stays put and the reading under it is shown
+/// above the chart, like scrubbing the main screen's chart.
+struct GlucoseWeekChartView: View {
+    @ObservedObject var viewModel: HistoryStatisticsViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var points: [HistoryStatisticsViewModel.GlucosePoint]?
+    /// Leading edge of the visible 24 hours.
+    @State private var scrollPosition = Date().addingTimeInterval(-Self.visibleLength)
+
+    private static let visibleLength: TimeInterval = 24 * 60 * 60
+    /// A reading further than this from the middle line is not "at" it.
+    private static let nearestReadingLimit: TimeInterval = 10 * 60
+
+    /// Today and the 6 days before it, like the "7d" statistics.
+    private let start: Date = {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return calendar.date(byAdding: .day, value: -6, to: today) ?? today.addingTimeInterval(-6 * 86400)
+    }()
+    private let end = Date()
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let points {
+                        if points.isEmpty {
+                            Text("No glucose readings in the last 7 days.", comment: "Week chart with no data")
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, minHeight: 200)
+                        } else {
+                            readout(points)
+                            chart(points)
+                            summary(points)
+                        }
+                    } else {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, minHeight: 200)
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle(Text("Last 7 Days", comment: "Title of the week glucose chart"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { dismiss() } label: {
+                        Text("Done", comment: "Close the week glucose chart").fontWeight(.semibold)
+                    }
+                }
+            }
+            .task {
+                points = await viewModel.glucose(since: start)
+            }
+        }
+    }
+
+    private var middle: Date { scrollPosition.addingTimeInterval(Self.visibleLength / 2) }
+
+    /// The reading closest to the middle line, if one is close enough.
+    private func reading(at date: Date, in points: [HistoryStatisticsViewModel.GlucosePoint]) -> HistoryStatisticsViewModel.GlucosePoint? {
+        // Binary search: the first reading at or after `date`, then its neighbour.
+        var low = 0
+        var high = points.count
+        while low < high {
+            let mid = (low + high) / 2
+            if points[mid].date < date { low = mid + 1 } else { high = mid }
+        }
+        let candidates = [low - 1, low].filter { points.indices.contains($0) }.map { points[$0] }
+        guard let nearest = candidates.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }),
+              abs(nearest.date.timeIntervalSince(date)) <= Self.nearestReadingLimit else { return nil }
+        return nearest
+    }
+
+    private func readout(_ points: [HistoryStatisticsViewModel.GlucosePoint]) -> some View {
+        let current = reading(at: middle, in: points)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if let current {
+                    Text(current.mgdl, format: .number.precision(.fractionLength(0)))
+                        .font(.system(size: 40, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Self.color(for: current.mgdl))
+                    Text("mg/dL", comment: "Glucose unit").foregroundStyle(.secondary)
+                } else {
+                    Text("—").font(.system(size: 40, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    Text("No reading", comment: "Week chart: no reading at the middle line").foregroundStyle(.secondary)
+                }
+            }
+            .monospacedDigit()
+            Text((current?.date ?? middle).formatted(.dateTime.weekday(.wide).day().month().hour().minute()))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func chart(_ points: [HistoryStatisticsViewModel.GlucosePoint]) -> some View {
+        let top = max(300, ((points.map(\.mgdl).max() ?? 0) / 50).rounded(.up) * 50)
+        let selected = reading(at: middle, in: points)
+        return Chart {
+            RectangleMark(xStart: .value("Start", start), xEnd: .value("End", end),
+                          yStart: .value("Low", 70), yEnd: .value("High", 180))
+                .foregroundStyle(GlucoseBandColor.inRange.opacity(0.12))
+
+            ForEach(points.indices, id: \.self) { index in
+                PointMark(x: .value("Time", points[index].date), y: .value("Glucose", points[index].mgdl))
+                    .symbolSize(14)
+                    .foregroundStyle(Self.color(for: points[index].mgdl))
+            }
+
+            // The middle line: its date follows the scroll position, so it stays
+            // in the middle of the visible 24 hours while the chart moves.
+            RuleMark(x: .value("Middle", middle))
+                .lineStyle(StrokeStyle(lineWidth: 1.5))
+                .foregroundStyle(Color.primary.opacity(0.45))
+
+            if let selected {
+                PointMark(x: .value("Time", selected.date), y: .value("Glucose", selected.mgdl))
+                    .symbolSize(90)
+                    .foregroundStyle(Self.color(for: selected.mgdl))
+            }
+        }
+        .chartXScale(domain: start...max(end, start.addingTimeInterval(Self.visibleLength)))
+        .chartYScale(domain: 40...top)
+        .chartScrollableAxes(.horizontal)
+        .chartXVisibleDomain(length: Self.visibleLength)
+        .chartScrollPosition(x: $scrollPosition)
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .hour, count: 3)) { value in
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.hour())
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: [54, 70, 180, 250]) { _ in
+                AxisGridLine()
+                AxisValueLabel()
+            }
+        }
+        .frame(height: 300)
+        .accessibilityLabel(Text("Glucose chart, last 7 days", comment: "Accessibility label of the week glucose chart"))
+    }
+
+    private func summary(_ points: [HistoryStatisticsViewModel.GlucosePoint]) -> some View {
+        let values = points.map(\.mgdl)
+        let inRange = Double(values.filter { $0 >= 70 && $0 <= 180 }.count) / Double(values.count)
+        let average = values.reduce(0, +) / Double(values.count)
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("In range", comment: "Week chart summary: time in range").font(.caption).foregroundStyle(.secondary)
+                Text(inRange, format: .percent.precision(.fractionLength(0))).font(.title3.weight(.semibold))
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("Average", comment: "Week chart summary: average glucose").font(.caption).foregroundStyle(.secondary)
+                Text("\(Int(average.rounded())) mg/dL").font(.title3.weight(.semibold))
+            }
+        }
+        .monospacedDigit()
+    }
+
+    private static func color(for mgdl: Double) -> Color {
+        switch mgdl {
+        case ..<54: return GlucoseBandColor.veryLow
+        case ..<70: return GlucoseBandColor.low
+        case ...180: return GlucoseBandColor.inRange
+        case ...250: return GlucoseBandColor.high
+        default: return GlucoseBandColor.veryHigh
+        }
     }
 }

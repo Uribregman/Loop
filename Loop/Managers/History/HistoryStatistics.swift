@@ -1562,3 +1562,78 @@ struct HistoryStatistics {
             : sorted[middle]
     }
 }
+
+// MARK: - Best time in range
+
+extension HistoryStatistics {
+    /// The best time in range over any run of consecutive calendar days.
+    struct BestTimeInRange: Equatable {
+        let fraction: Double
+        /// First and last calendar day of the run.
+        let firstDay: Date
+        let lastDay: Date
+    }
+
+    /// A run only counts with at least 70% of its possible readings (288 a day),
+    /// the usual minimum for a CGM report, so a stretch with the sensor off for a
+    /// day cannot score well off the few readings it has.
+    static let bestTimeInRangeMinimumCoverage = 0.7
+
+    /// Best time in range for each run length in `windowDays`, from every line.
+    ///
+    /// Uses the same 70–180 mg/dL rule and the same de-duplication as `compute`.
+    /// Runs are whole calendar days, the last one ending today, so the period on
+    /// screen (the last N days, today included) is always one of the candidates.
+    static func bestTimeInRange(from rawLines: [HistoryLine],
+                                windowDays: [Int],
+                                calendar: Calendar = .current) -> [Int: BestTimeInRange] {
+        var counts: [Date: (inRange: Int, total: Int)] = [:]
+        for line in HistoryLineDeduplicator.deduplicated(rawLines) {
+            guard line.t == "glucose", let mgdl = line.mgdl, let date = line.date else { continue }
+            let day = calendar.startOfDay(for: date)
+            var entry = counts[day] ?? (0, 0)
+            entry.total += 1
+            if mgdl >= 70 && mgdl <= 180 { entry.inRange += 1 }
+            counts[day] = entry
+        }
+        guard let firstDay = counts.keys.min() else { return [:] }
+
+        // Every calendar day from the first reading to today, including empty ones,
+        // so a run is always N real days long.
+        var days: [(day: Date, inRange: Int, total: Int)] = []
+        let today = calendar.startOfDay(for: Date())
+        var day = firstDay
+        while day <= today {
+            let entry = counts[day] ?? (0, 0)
+            days.append((day, entry.inRange, entry.total))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+
+        var result: [Int: BestTimeInRange] = [:]
+        for window in Set(windowDays) where window > 0 && window <= days.count {
+            let minimumReadings = Double(window * 288) * bestTimeInRangeMinimumCoverage
+            var inRange = 0
+            var total = 0
+            var best: BestTimeInRange?
+            for index in days.indices {
+                inRange += days[index].inRange
+                total += days[index].total
+                if index >= window {
+                    inRange -= days[index - window].inRange
+                    total -= days[index - window].total
+                }
+                guard index >= window - 1, Double(total) >= minimumReadings else { continue }
+                let fraction = Double(inRange) / Double(total)
+                // `>=`, so a tie goes to the more recent run.
+                if fraction >= (best?.fraction ?? -1) {
+                    best = BestTimeInRange(fraction: fraction,
+                                           firstDay: days[index - window + 1].day,
+                                           lastDay: days[index].day)
+                }
+            }
+            result[window] = best
+        }
+        return result
+    }
+}
