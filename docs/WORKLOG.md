@@ -7,6 +7,19 @@ and `docs/DESIGN_SYSTEM.md` / `docs/PROCESS.md` for the standing rules.
 
 ---
 
+## 2026-10-04 — Tiles too dark on iOS 27 dark mode (2026-10-04). Committed.
+
+Owner: in Statistics on iOS 27 dark the cards were too dark. Measured: the shared tile
+glass (`loopTileGlass`, tint white 0.14) renders #242424 on iOS 26.5 dark (as asked) but
+#030303 on iOS 27.0 dark — darker than the #0D0D0D screen, so the cards all but vanished.
+First fix (painting the tile #242424 directly) was too light for the owner on iOS 27 and
+not glass. Final fix in GlassStyles.swift: on iOS 27+ in dark mode the tile stays liquid
+glass with a 6.3% white wash on it, which lifts it to #131313 — halfway between the old
+#030303 and #242424. Light mode and iOS 26 are untouched. Applies to every screen using
+`loopTileGlass` (Statistics, bolus entry, meal entry, favourite food). Verified:
+Statistics on iOS 27 dark measures #131313. Not checked: the other three screens on
+iOS 27 dark.
+
 ## 2026-09-24 — Statistics: best time in range, 7-day glucose chart (2026-09-24). Committed.
 
 - Best time in range: for each period (3–90 days) the Time In Range card shows the

@@ -105,11 +105,37 @@ extension Color {
     }
 }
 
+/// The shared tile background behind `loopTileGlass()`: liquid glass everywhere.
+///
+/// iOS 27 renders the dark-mode glass tint far darker than iOS 26 does: the same
+/// `loopTileTint` measured #242424 on iOS 26.5 (what it asks for) but #030303 on
+/// iOS 27.0, darker than the #0D0D0D screen behind it, so tiles all but vanished.
+/// The owner found #242424 too light on iOS 27 and asked for halfway between the
+/// two, still as glass. So on iOS 27 in dark mode a thin white wash sits on the
+/// glass and lifts it to about #131313. Light mode and iOS 26 are untouched.
+private struct LoopTileGlass: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// White over the #030303 glass: 3 + 0.063 × 252 ≈ 19, i.e. #131313.
+    private static let iOS27DarkLift = 0.063
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: loopTileCornerRadius, style: .continuous)
+        if #available(iOS 27.0, *), colorScheme == .dark {
+            content
+                .background(shape.fill(Color.white.opacity(Self.iOS27DarkLift)))
+                .glassEffect(.regular.tint(Color.loopTileTint), in: shape)
+        } else {
+            content.glassEffect(.regular.tint(Color.loopTileTint), in: shape)
+        }
+    }
+}
+
 extension View {
     /// Big-tile liquid glass, exactly like the carb-entry cards.
     /// Tinted so all tiles share one shade in dark mode.
     func loopTileGlass() -> some View {
-        glassEffect(.regular.tint(Color.loopTileTint), in: RoundedRectangle(cornerRadius: loopTileCornerRadius, style: .continuous))
+        modifier(LoopTileGlass())
     }
 
     /// Apply interactive glass only when `condition` is true (e.g. selection states).
