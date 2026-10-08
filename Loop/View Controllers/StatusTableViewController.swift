@@ -1933,7 +1933,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         deviceManager.analyticsServicesManager.didDisplayCarbEntryScreen()
     }
 
-    // MARK: - Meal entry picker (tap/hold the carb button → AI / Manual bubbles)
+    // MARK: - Carb button
 
     private static var mealButtonKey: UInt8 = 0
     var mealButton: UIButton {
@@ -1947,104 +1947,14 @@ final class StatusTableViewController: LoopChartsTableViewController {
         button.tintColor = .carbTintColor
         // No highlight dim/tint on press (the .system button flashed white).
         button.adjustsImageWhenHighlighted = false
-        // Center the icon so a scale transform grows it symmetrically (no drift).
-        button.contentHorizontalAlignment = .center
-        button.contentVerticalAlignment = .center
         button.accessibilityLabel = NSLocalizedString("Add Meal", comment: "The label of the carb entry button")
         button.addTarget(self, action: #selector(mealButtonTapped), for: .touchUpInside)
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(mealButtonPressed(_:)))
-        press.minimumPressDuration = 0.25
-        button.addGestureRecognizer(press)
         objc_setAssociatedObject(self, &Self.mealButtonKey, button, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         return button
     }
 
-    private static var mealPickerKey: UInt8 = 0
-    private var mealPicker: MealEntryPickerOverlay? {
-        get { objc_getAssociatedObject(self, &Self.mealPickerKey) as? MealEntryPickerOverlay }
-        set { objc_setAssociatedObject(self, &Self.mealPickerKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
-    }
-
     @objc private func mealButtonTapped() {
-        // AI off → behave exactly like today: straight to manual entry, no picker.
-        guard CarbEstimationSettings().isEnabled else {
-            presentCarbEntryScreen(nil)
-            return
-        }
-        if let picker = mealPicker {
-            picker.dismiss()
-            mealPicker = nil
-        } else {
-            showMealPicker()
-        }
-    }
-
-    @objc private func mealButtonPressed(_ gesture: UILongPressGestureRecognizer) {
-        guard CarbEstimationSettings().isEnabled else { return }
-        switch gesture.state {
-        case .began:
-            setMealButtonExpanded(true)   // subtle grow while holding
-            if mealPicker == nil { showMealPicker() }
-        case .changed:
-            if let picker = mealPicker, let host = picker.superview {
-                picker.updateHover(at: gesture.location(in: host))
-            }
-        case .ended:
-            setMealButtonExpanded(false)
-            if let picker = mealPicker {
-                picker.commitHoverOrDismiss()
-                if picker.superview == nil { mealPicker = nil }
-            }
-        case .cancelled, .failed:
-            setMealButtonExpanded(false)
-            mealPicker?.dismiss()
-            mealPicker = nil
-        default:
-            break
-        }
-    }
-
-    /// Subtle, fluid spring scale on the carb button while it's being held.
-    /// Animates the BUTTON's own transform (its layoutSubviews doesn't touch it,
-    /// so the highlight pass on touch-down can't cancel the grow); the centered
-    /// content keeps it from drifting sideways.
-    private func setMealButtonExpanded(_ expanded: Bool) {
-        UIView.animate(withDuration: expanded ? 0.7 : 0.5, delay: 0,
-                       usingSpringWithDamping: 0.72, initialSpringVelocity: 0,
-                       options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.mealButton.transform = expanded
-                ? CGAffineTransform(scaleX: 1.4, y: 1.4)
-                : .identity
-        }
-    }
-
-    private func showMealPicker() {
-        // Host on the navigation controller's view (not the scrolling table view)
-        // so the bubbles stay pinned above the bottom bar while scrolling.
-        let host: UIView = navigationController?.view ?? view
-        let anchor = mealButton.convert(mealButton.bounds, to: host)
-        let picker = MealEntryPickerOverlay(anchor: anchor) { [weak self] choice in
-            guard let self else { return }
-            self.mealPicker = nil
-            switch choice {
-            case .ai:     self.userTappedAICarbEstimation()
-            case .manual: self.presentCarbEntryScreen(nil)
-            case .none:   break
-            }
-        }
-        host.addSubview(picker)
-        picker.frame = host.bounds
-        picker.show()
-        mealPicker = picker
-    }
-
-    @objc func userTappedAICarbEstimation() {
-        let viewModel = MealEntryViewModel(delegate: deviceManager)
-        let flow = AICarbEntryFlowView(viewModel: viewModel, coordinator: CarbEstimationCoordinator())
-            .environmentObject(deviceManager.displayGlucosePreference)
-        let hostingController = DismissibleHostingController(rootView: flow, isModalInPresentation: false)
-        hostingController.view.accessibilityIdentifier = Self.mealEntryScreenIdentifier
-        present(hostingController, animated: true)
+        presentCarbEntryScreen(nil)
     }
 
     @IBAction func presentBolusScreen() {

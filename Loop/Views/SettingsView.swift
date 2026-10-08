@@ -51,7 +51,6 @@ public struct SettingsView: View {
             
             case favoriteFoods
             case preferences
-            case aiCarbEstimation
         }
     }
     
@@ -97,8 +96,6 @@ public struct SettingsView: View {
                     if viewModel.servicesViewModel.showServices {
                         servicesSection
                     }
-
-                    aiCarbEstimationSection
 
                     historyLogSection
                     followSection
@@ -153,10 +150,6 @@ public struct SettingsView: View {
                     PreferencesView(viewModel: PreferencesViewModel(preferencesProvider: Preferences.shared))
                         .environmentObject(displayGlucosePreference)
                         .environment(\.dismissAction, { self.sheet = nil })
-                case .aiCarbEstimation:
-                    NavigationView {
-                        AICarbSettingsView()
-                    }
                 }
             }
         }
@@ -405,16 +398,6 @@ extension SettingsView {
                         imageView: AnyView(Image(systemName: "gearshape.fill").font(.system(size: 30, weight: .bold))),
                         label: NSLocalizedString("Preferences", comment: "Title text for button to Preferences"),
                         descriptiveText: NSLocalizedString("Customize your Loop experience by adjusting additional settings", comment: "Descriptive text for Preferences"))
-        }
-    }
-
-    private var aiCarbEstimationSection: some View {
-        Section {
-            LargeButton(action: { sheet = .aiCarbEstimation },
-                        includeArrow: true,
-                        imageView: AnyView(Image(systemName: "sparkles").font(.system(size: 30, weight: .bold)).foregroundColor(carbTintColor)),
-                        label: NSLocalizedString("AI Carb Estimation", comment: "Title text for button to AI Carb Estimation settings"),
-                        descriptiveText: NSLocalizedString("Optional photo-based carb estimate you confirm before saving", comment: "Descriptive text for AI Carb Estimation settings"))
         }
     }
 

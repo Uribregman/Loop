@@ -340,30 +340,6 @@ final class MealEntryViewModel: ObservableObject {
         isFavorited = true
     }
 
-    // MARK: - AI pre-fill
-
-    /// Populate sub-blocks from an AI estimate (pre-filled, editable, NOT saved).
-    /// Amounts are left nil so the range is shown until the user confirms (§6).
-    func applyEstimate(_ estimate: CarbEstimate) {
-        let blocks = estimate.components.prefix(maxSubBlocks).map { c -> MealCarbSubBlock in
-            // Offset time is meal time plus the AI's per-component offset.
-            var b = MealCarbSubBlock(offsetTime: mealTime.addingTimeInterval(c.offsetMinutes * 60),
-                                     absorptionTime: c.absorptionTime)
-            b.kind = (c.kind == .fpu) ? .fpu : .fast
-            b.foodEmoji = c.emoji                          // one of the 3 presets
-            b.caption = c.name                             // "what it contains" at the top
-            b.amountText = formatAmount(c.gramsMidpoint)   // pre-filled → just tap Continue
-            b.suggestedGramsLow = c.gramsLow
-            b.suggestedGramsHigh = c.gramsHigh
-            b.absorptionReason = c.absorptionReason
-            return b
-        }
-        if !blocks.isEmpty {
-            subBlocks = Array(blocks)
-            mealName = estimate.mealName          // all foods, not just one
-        }
-    }
-
     // MARK: - Submit (the ONLY save path)
 
     var submitDisabled: Bool { !subBlocks.contains { $0.hasValidAmount } }
@@ -394,21 +370,6 @@ final class MealEntryViewModel: ObservableObject {
         let entries = buildEntries()
         guard !entries.isEmpty else { return }
         isSaving = true
-
-        // Log confirmed values for AI accuracy review (§4a).
-        for (block, entry) in zip(subBlocks.filter({ $0.hasValidAmount }), entries) {
-            if block.suggestedGramsLow != nil {
-                CarbEstimateLog.append(CarbEstimateLogEntry(
-                    date: Date(),
-                    provider: CarbEstimationSettings().provider.rawValue,
-                    suggestedGramsLow: block.suggestedGramsLow ?? 0,
-                    suggestedGramsHigh: block.suggestedGramsHigh ?? 0,
-                    suggestedAbsorptionSeconds: block.absorptionTime,
-                    confirmedGrams: entry.quantity.doubleValue(for: unit),
-                    confirmedAbsorptionSeconds: entry.absorptionTime
-                ))
-            }
-        }
 
         saveMealMetadata(for: entries)
 

@@ -13,7 +13,6 @@ enum Deeplink: String, CaseIterable {
     case bolus = "manual-bolus"
     case preMeal = "pre-meal-preset"
     case customPresets = "custom-presets"
-    case aiMeal = "ai-meal"
     
     init?(url: URL?) {
         guard let url, let host = url.host, let deeplink = Deeplink.allCases.first(where: { $0.rawValue == host }) else {

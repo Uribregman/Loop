@@ -80,8 +80,6 @@ class RootNavigationController: UINavigationController {
             statusTableViewController.presentBolusScreen()
         case .customPresets:
             statusTableViewController.presentCustomPresets()
-        case .aiMeal:
-            statusTableViewController.userTappedAICarbEstimation()
         }
     }
 
