@@ -349,6 +349,7 @@
 		A963B27A252CEBAE0062AA12 /* SetBolusUserInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A963B279252CEBAE0062AA12 /* SetBolusUserInfoTests.swift */; };
 		A966152623EA5A26005D8B29 /* DefaultAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A966152423EA5A25005D8B29 /* DefaultAssets.xcassets */; };
 		A966152723EA5A26005D8B29 /* DerivedAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A966152523EA5A25005D8B29 /* DerivedAssets.xcassets */; };
+		A1C0F1C0A1C0F1C0A1C0F1C2 /* LoopIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A1C0F1C0A1C0F1C0A1C0F1C1 /* LoopIcon.icon */; };
 		A966152A23EA5A37005D8B29 /* DefaultAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A966152823EA5A37005D8B29 /* DefaultAssets.xcassets */; };
 		A966152B23EA5A37005D8B29 /* DerivedAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A966152923EA5A37005D8B29 /* DerivedAssets.xcassets */; };
 		A967D94C24F99B9300CDDF8A /* OutputStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A967D94B24F99B9300CDDF8A /* OutputStream.swift */; };
@@ -1201,6 +1202,7 @@
 		A963B279252CEBAE0062AA12 /* SetBolusUserInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetBolusUserInfoTests.swift; sourceTree = "<group>"; };
 		A966152423EA5A25005D8B29 /* DefaultAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = DefaultAssets.xcassets; sourceTree = "<group>"; };
 		A966152523EA5A25005D8B29 /* DerivedAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = DerivedAssets.xcassets; sourceTree = "<group>"; };
+		A1C0F1C0A1C0F1C0A1C0F1C1 /* LoopIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = LoopIcon.icon; sourceTree = "<group>"; };
 		A966152823EA5A37005D8B29 /* DefaultAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = DefaultAssets.xcassets; sourceTree = "<group>"; };
 		A966152923EA5A37005D8B29 /* DerivedAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = DerivedAssets.xcassets; sourceTree = "<group>"; };
 		A967D94B24F99B9300CDDF8A /* OutputStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputStream.swift; sourceTree = "<group>"; };
@@ -1829,6 +1831,7 @@
 				43776F951B8022E90074EA36 /* Main.storyboard */,
 				A966152423EA5A25005D8B29 /* DefaultAssets.xcassets */,
 				A966152523EA5A25005D8B29 /* DerivedAssets.xcassets */,
+				A1C0F1C0A1C0F1C0A1C0F1C1 /* LoopIcon.icon */,
 				C11AA5C7258736CF00BDE12F /* DerivedAssetsBase.xcassets */,
 				43E344A01B9E144300C85C07 /* Extensions */,
 				43F5C2E41B93C5D4003EB13D /* Managers */,
@@ -3215,6 +3218,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1C0F1C0A1C0F1C0A1C0F1C2 /* LoopIcon.icon in Resources */,
 				B66D1F392E6A5D6600471149 /* InfoPlist.xcstrings in Resources */,
 				C13255D6223E7BE2008AF50C /* BolusProgressTableViewCell.xib in Resources */,
 				C1EE9E812A38D0FB0064784A /* BuildDetails.plist in Resources */,
@@ -4588,7 +4592,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ASSETCATALOG_COMPILER_APPICON_NAME = "$(APPICON_NAME)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = LoopIcon;
 				CODE_SIGN_ENTITLEMENTS = "$(LOOP_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_DEBUG)";
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
@@ -4618,7 +4622,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ASSETCATALOG_COMPILER_APPICON_NAME = "$(APPICON_NAME)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = LoopIcon;
 				CODE_SIGN_ENTITLEMENTS = "$(LOOP_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "$(LOOP_CODE_SIGN_IDENTITY_RELEASE)";
 				CODE_SIGN_STYLE = "$(LOOP_CODE_SIGN_STYLE)";
