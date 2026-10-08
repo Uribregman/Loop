@@ -86,3 +86,9 @@ Loop\ Widget\ Extension/DerivedAssets.xcassets/*
 Loop/DerivedAssetsOverride.xcassets
 WatchApp/DerivedAssetsOverride.xcassets
 Loop\ Widget\ Extension/DerivedAssetsOverride.xcassets
+
+# Local-only files (kept in Loop-private/ next to the workspace, never committed)
+graphify-out/
+HANDOFF.md
+*.orig
+*.rej
