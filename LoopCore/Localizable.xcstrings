@@ -152,7 +152,7 @@
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Actieve Koolhydraten"
+            "value" : "Actieve koolhydraten"
           }
         },
         "ro" : {
@@ -188,6 +188,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Aktive karbohydrater (COB)"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actieve koolhydraten (COB)"
           }
         },
         "ro" : {
@@ -230,7 +236,7 @@
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Actieve Koolhydraten"
+            "value" : "Actieve koolhydraten"
           }
         },
         "ro" : {
@@ -273,7 +279,7 @@
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Actieve Insuline"
+            "value" : "Actieve insuline"
           }
         },
         "ro" : {
@@ -311,6 +317,12 @@
             "value" : "Aktiv insulin (IOB)"
           }
         },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actieve insuline (IOB)"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
@@ -345,6 +357,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "kl."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "om"
           }
         },
         "ro" : {
@@ -409,7 +427,7 @@
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatisch Bolussen"
+            "value" : "Automatisch bolussen"
           }
         },
         "pl" : {
@@ -515,6 +533,12 @@
             "value" : "COB"
           }
         },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "COB"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
@@ -596,7 +620,7 @@
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Huidige Glucose"
+            "value" : "Huidige glucose"
           }
         },
         "ro" : {
@@ -634,6 +658,12 @@
             "value" : "Nåværende Glukose (Verdi og Pil)"
           }
         },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Huidige glucose (waarde en pijl)"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
@@ -664,6 +694,12 @@
           }
         },
         "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delta"
+          }
+        },
+        "nl" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delta"
@@ -703,6 +739,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delta Glukose (Delta)"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Glucoseverandering (Delta)"
           }
         },
         "ro" : {
@@ -822,6 +864,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Forutsagt glukoseverdi (eventuell BG)"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voorspelde glucose"
           }
         },
         "ro" : {
@@ -984,6 +1032,12 @@
             "value" : "Felt og rad"
           }
         },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grafiek en rij"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
@@ -1017,6 +1071,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Netto basaldose (basal)"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relatieve basaalstand"
           }
         },
         "ro" : {
@@ -1053,6 +1113,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Kun rad"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alleen rij"
           }
         },
         "ro" : {
@@ -1158,7 +1224,7 @@
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alleen Tijdelijk Basaal"
+            "value" : "Alleen tijdelijk basaal"
           }
         },
         "pl" : {
@@ -1221,6 +1287,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Oppdatert"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bijgewerkt"
           }
         },
         "ro" : {
@@ -1300,6 +1372,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Oppdatert sist"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bijgewerkt om"
           }
         },
         "ro" : {
