@@ -37,6 +37,17 @@ class LiveActivityManager : LiveActivityManagerProxy {
     /// rather than leave the overlay stuck until the next loop cycle.
     private var updateRetryCount = 0
     private static let maxUpdateRetries = 5
+
+    /// The last real (non-placeholder) state sent to the activity. A recreated
+    /// activity starts from it, so the island never falls back to the empty
+    /// placeholder ("0", no delta, no chart) while the next update is on its way.
+    private var lastState: GlucoseActivityAttributes.ContentState?
+
+    /// ActivityKit drops an update whose attributes + state exceed 4 KB, without
+    /// any error. Stay well below it.
+    private static let maxStateBytes = 3000
+    /// A remembered state older than this is not worth showing as current.
+    private static let lastStateMaxAge = TimeInterval(minutes: 15)
     
     private let cobFormatter: NumberFormatter =  {
         let numberFormatter = NumberFormatter()
@@ -80,6 +91,12 @@ class LiveActivityManager : LiveActivityManagerProxy {
             return
         }
         
+        // Pick up what a previous run of the app was showing.
+        self.lastState = Activity<GlucoseActivityAttributes>.activities
+            .map { $0.content.state }
+            .filter { !$0.ended }
+            .max { $0.date < $1.date }
+
         initEmptyActivity(settings: self.settings)
         update()
         
@@ -188,7 +205,21 @@ class LiveActivityManager : LiveActivityManagerProxy {
                 isMmol: unit == HKUnit.millimolesPerLiter
             )
 
-            let state = GlucoseActivityAttributes.ContentState(
+            // Whole seconds and display precision only: the chart cannot show more, and
+            // the extra digits only made the payload bigger.
+            func rounded(_ value: Double) -> Double {
+                isMmol ? (value * 10).rounded() / 10 : value.rounded()
+            }
+            var chartSamples = glucoseSamples.suffix(100).map { item in
+                GlucoseSampleAttributes(
+                    x: Date(timeIntervalSinceReferenceDate: item.startDate.timeIntervalSinceReferenceDate.rounded()),
+                    y: rounded(item.quantity.doubleValue(for: unit))
+                )
+            }
+            let chartPrediction = predicatedGlucose.map(rounded)
+
+            func makeState() -> GlucoseActivityAttributes.ContentState {
+                GlucoseActivityAttributes.ContentState(
                 date: currentGlucose.startDate,
                 ended: false,
                 preset: presetContext,
@@ -201,21 +232,29 @@ class LiveActivityManager : LiveActivityManagerProxy {
                 isCloseLoop: statusContext?.isClosedLoop ?? false,
                 lastCompleted: statusContext?.lastLoopCompleted,
                 bottomRow: bottomRow,
-                // In order to prevent maxSize errors, only allow the last 100 samples to be sent
-                // Will most likely not be an issue, might be an issue for debugging/CGM simulator with 5sec interval
-                glucoseSamples: glucoseSamples.suffix(100).map { item in
-                    return GlucoseSampleAttributes(x: item.startDate, y: item.quantity.doubleValue(for: unit))
-                },
-                predicatedGlucose: predicatedGlucose,
+                glucoseSamples: chartSamples,
+                predicatedGlucose: chartPrediction,
                 predicatedStartDate: statusContext?.predictedGlucose?.startDate,
                 predicatedInterval: statusContext?.predictedGlucose?.interval,
                 yAxisMarks: chartYAxis
-            )
+                )
+            }
+
+            // Still too big (very dense CGM data, many target-range pieces): drop the
+            // oldest readings until it fits rather than lose the whole update.
+            var state = makeState()
+            let encoder = JSONEncoder()
+            while chartSamples.count > 12,
+                  let size = try? encoder.encode(state).count, size > Self.maxStateBytes {
+                chartSamples.removeFirst(Swift.min(6, chartSamples.count - 12))
+                state = makeState()
+            }
             
             await self.activity?.update(ActivityContent(
                 state: state,
                 staleDate: Date.now.addingTimeInterval(.hours(1))
             ))
+            self.lastState = state
             self.updateRetryCount = 0
         }
     }
@@ -541,9 +580,14 @@ class LiveActivityManager : LiveActivityManagerProxy {
         return result
     }
     
+    /// Starts the activity. It opens on the last known state when that is recent;
+    /// only without one does it open on the empty placeholder.
     private func initEmptyActivity(settings: LiveActivitySettings) {
         do {
-            let dynamicState = GlucoseActivityAttributes.ContentState(
+            let recentState = lastState.flatMap {
+                -$0.date.timeIntervalSinceNow <= Self.lastStateMaxAge ? $0 : nil
+            }
+            let dynamicState = recentState ?? GlucoseActivityAttributes.ContentState(
                 date: Date.now,
                 ended: true,
                 preset: nil,
