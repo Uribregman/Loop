@@ -116,11 +116,36 @@ struct HistoryStatistics {
     // MARK: - Insulin
 
     struct Insulin {
+        /// Everything delivered: boluses and basal.
         var totalUnits: Double = 0
+        /// Every bolus, the user's own and Loop's.
         var bolusUnits: Double = 0
+        /// Boluses the user asked for.
+        var manualBolusUnits: Double = 0
+        /// Boluses Loop gave by itself.
+        var automaticBolusUnits: Double = 0
+        /// Basal actually delivered: temp basals as recorded, plus the programmed
+        /// schedule for the time no temp basal or suspension was in force.
+        ///
+        /// ⚠️ THE SCHEDULED PART IS NOT IN THE LOG. The pump reports temp basals,
+        /// boluses, suspends and resumes; the schedule it runs the rest of the
+        /// time is never written. Summing dose records alone therefore missed
+        /// about 16 U a day in one real log, so "insulin per day" read 65 against
+        /// the 84 the pods themselves reported, and "given as bolus" read 96%.
+        /// It is rebuilt here from the schedule (`BasalDelivery`), which matched
+        /// the pods' own totals to 0.1%. Without a schedule it cannot be, and
+        /// `includesScheduledBasal` is false.
         var basalUnits: Double = 0
-        var automaticUnits: Double = 0
+        /// The part of `basalUnits` that came from recorded temp basals.
+        var tempBasalUnits: Double = 0
+        /// False when no basal schedule was available: `basalUnits` is then temp
+        /// basals only and every total is short by the scheduled basal.
+        var includesScheduledBasal = false
         var dailyAverage: Double = 0
+        /// Shares of the total, 0...1. The three add up to 1.
+        var manualBolusShare: Double { totalUnits > 0 ? manualBolusUnits / totalUnits : 0 }
+        var automaticBolusShare: Double { totalUnits > 0 ? automaticBolusUnits / totalUnits : 0 }
+        var basalShare: Double { totalUnits > 0 ? basalUnits / totalUnits : 0 }
         /// Bolus as a fraction of total, 0...1.
         var bolusShare: Double { totalUnits > 0 ? bolusUnits / totalUnits : 0 }
     }
@@ -143,8 +168,13 @@ struct HistoryStatistics {
         var meanHours: Double = 0
         /// Sessions that ended in a fault, as a fraction of all sessions.
         var faultRate: Double = 0
-        /// Units left in pods when they stopped — insulin thrown away.
+        /// Units left in pods when they stopped — insulin thrown away. Only the
+        /// pods that reported an amount: see `overfullCount`.
         var wastedUnits: Double = 0
+        /// Pods that stopped with MORE THAN 50 U left. A pod cannot measure its
+        /// reservoir above 50 U and reports a fixed marker (51.15) instead, which
+        /// used to be added to the discarded total as if it were an amount.
+        var overfullCount = 0
         /// Stop reason → how many times, most common first.
         var stopReasons: [(reason: String, count: Int)] = []
     }
@@ -361,17 +391,33 @@ struct HistoryStatistics {
     /// the underlying settings are tuned: a well-tuned profile needs less
     /// correcting, so a high rate is worth noticing even when outcomes are fine.
     struct LoopActivity {
+        /// Automatic boluses a day (a count).
         var automaticDosesPerDay: Double = 0
         var manualBolusesPerDay: Double = 0
-        /// Basal units actually delivered per day.
+        /// Basal units actually delivered per day — see `Insulin.basalUnits`.
         var deliveredBasalPerDay: Double = 0
+        /// Units a day Loop gave as automatic boluses.
+        var automaticBolusUnitsPerDay: Double = 0
         /// The programmed schedule's daily total, when known.
         var scheduledBasalPerDay: Double?
-        /// Delivered ÷ scheduled. Above 1 means the algorithm is consistently
-        /// giving more than the profile asks for.
+        /// False when the delivered basal is temp basals only — see
+        /// `Insulin.includesScheduledBasal`. The ratios below are then nil.
+        var includesScheduledBasal = false
+        /// Basal delivered ÷ programmed.
+        ///
+        /// On automatic-bolus dosing Loop can only CUT basal, so this is at most
+        /// 1 by construction; what it adds, it adds as automatic boluses. Read it
+        /// together with `loopRatio`.
         var basalRatio: Double? {
-            guard let scheduled = scheduledBasalPerDay, scheduled > 0 else { return nil }
+            guard includesScheduledBasal, let scheduled = scheduledBasalPerDay, scheduled > 0 else { return nil }
             return deliveredBasalPerDay / scheduled
+        }
+        /// (Basal delivered + automatic boluses) ÷ programmed basal: everything
+        /// Loop decided, against what the profile alone would have given. Above 1
+        /// means Loop is consistently giving more than the profile asks for.
+        var loopRatio: Double? {
+            guard includesScheduledBasal, let scheduled = scheduledBasalPerDay, scheduled > 0 else { return nil }
+            return (deliveredBasalPerDay + automaticBolusUnitsPerDay) / scheduled
         }
     }
 
@@ -481,6 +527,25 @@ struct HistoryStatistics {
     static let weekendWeekdayNumbers: Set<Int> = [6, 7]
     /// Readings inside 00:00–06:00 before a night counts. 24 is two hours.
     static let minimumReadingsPerNight = 24
+    /// CGM readings a day needs before it is judged AS A DAY: goal days, the
+    /// streak, weekday averages and the weekly trend. 202 is 70% of the 288 a
+    /// 5-minute sensor produces.
+    ///
+    /// ⚠️ HIGHER THAN `minimumReadingsForCountedDay` ON PURPOSE. Six hours of
+    /// readings prove the app ran that day; they do not describe the day. With
+    /// the lower floor, today became a "day that met the goal" from six in the
+    /// morning on, judged on the night alone, which is usually the best part of
+    /// it, and each of these figures gave that morning the weight of a full day.
+    static let minimumReadingsForJudgedDay = 202
+    /// Carb entries this close to a meal's first entry are part of that meal.
+    static let mealMergeWindow: TimeInterval = 30 * 60
+    /// Meals with a recorded eating time needed before a logging delay is shown.
+    static let minimumMealsForLoggingDelay = 10
+    /// The post-meal rise is the peak within this long after eating.
+    static let postMealWindow: TimeInterval = 3 * 3600
+    /// Two readings further apart than this are either side of a sensor gap:
+    /// nothing is known about the time between them.
+    static let sensorGapThreshold: TimeInterval = 30 * 60
 
     /// Span actually covered by the data.
     var firstDate: Date?
@@ -497,11 +562,21 @@ struct HistoryStatistics {
     /// the user knew they had actually taken.
     var daysWithData: Int = 0
 
-    /// Days used for per-day averages: days that actually have records.
+    /// `daysWithData` as a length of time: the first and last of those days count
+    /// for the part of them the records cover.
+    ///
+    /// ⚠️ TODAY IS NOT A WHOLE DAY UNTIL IT IS OVER. The period ends now, so its
+    /// last day is as long as the time since midnight. Counting it as a full day
+    /// divided two days of insulin by three at a quarter past midnight (the
+    /// 3-day "insulin per day" read a third low and climbed back through the
+    /// day), and every other "per day" and "per week" figure with it. The same
+    /// goes for the day the log began.
+    var dayEquivalents: Double = 0
+
+    /// Days used for per-day averages: the time the days with records cover.
     var dayCount: Double {
-        // At least one, so a single day of data doesn't divide by ~0 and report
-        // absurd daily averages.
-        max(1, Double(daysWithData))
+        // At least one, so a few hours of data are not scaled up to a "day".
+        max(1, dayEquivalents)
     }
 
     /// Elapsed span of the window, in days. Used where the question really is
@@ -516,6 +591,7 @@ struct HistoryStatistics {
 
     static func compute(from rawLines: [HistoryLine],
                         scheduledBasalPerDay: Double? = nil,
+                        basalSchedule: [BasalDelivery.ScheduleEntry] = [],
                         calendar: Calendar = .current) -> HistoryStatistics {
         // ⚠️ FIRST, ALWAYS. The log is append-only and repeats events the pump
         // re-reports; counting the repeats inflated every insulin total (a third
@@ -535,9 +611,9 @@ struct HistoryStatistics {
         // (date, mg/dL) kept sorted later, for the post-meal pass.
         var glucoseSeries: [(date: Date, value: Double)] = []
         // eating time + how late it was logged, for the post-meal pass.
-        var mealEvents: [(eaten: Date, delay: TimeInterval?)] = []
-        var mealSizes: [(eaten: Date, grams: Double)] = []
-        var bolusTimes: [Date] = []
+        var mealEntries: [(eaten: Date, grams: Double, delay: TimeInterval?)] = []
+        var mealSpans: [(eaten: Date, absorbedBy: Date)] = []
+        var manualBolusTimes: [Date] = []
         var hourSums = [Double](repeating: 0, count: 24)
         var hourCounts = [Int](repeating: 0, count: 24)
         var hourValues = [[Double]](repeating: [], count: 24)
@@ -557,12 +633,13 @@ struct HistoryStatistics {
         var nightExtremes: [Date: (low: Double, high: Double)] = [:]
         var dayExtremes: [Date: (low: Double, high: Double)] = [:]
         var automaticDoses = 0, manualBoluses = 0
-        var deliveredBasalUnits = 0.0
         var stopReasonCounts: [String: Int] = [:]
         var faultCount = 0
         var podHours: [Double] = []
         var earliest: Date?
         var latest: Date?
+        var activeFrom: Date?
+        var activeTo: Date?
 
         for line in lines {
             guard let date = line.date else { continue }
@@ -574,6 +651,14 @@ struct HistoryStatistics {
             case "glucose": glucosePerDay[day, default: 0] += 1
             case "dose", "meal": eventDays.insert(day)
             default: break
+            }
+            // The stretch the app was actually recording: readings, doses and
+            // meals. A pod record is written when a pod STOPS and describes a
+            // session that may have begun days before the log did, so it does
+            // not mark when recording started.
+            if line.t == "glucose" || line.t == "dose" || line.t == "meal" {
+                if activeFrom == nil || date < activeFrom! { activeFrom = date }
+                if activeTo == nil || date > activeTo! { activeTo = date }
             }
 
             switch line.t {
@@ -619,7 +704,6 @@ struct HistoryStatistics {
                     // all we need is a stable per-night bucket.
                     let night = calendar.startOfDay(for: date)
                     nightReadings[night, default: 0] += 1
-                    if mgdl < 70 { nightsWithLow.insert(night) }
                 } else {
                     daytime.append(mgdl)
                 }
@@ -628,26 +712,41 @@ struct HistoryStatistics {
                 // Only units actually delivered count. A temp basal reports a
                 // RATE as well; adding both would double-count the same insulin.
                 if let units = line.units {
-                    stats.insulin.totalUnits += units
                     if line.kind == "bolus" {
                         stats.insulin.bolusUnits += units
-                        if line.automatic == true { automaticDoses += 1 } else { manualBoluses += 1 }
-                        bolusTimes.append(date)
+                        if line.automatic == true {
+                            automaticDoses += 1
+                            stats.insulin.automaticBolusUnits += units
+                        } else {
+                            manualBoluses += 1
+                            stats.insulin.manualBolusUnits += units
+                            manualBolusTimes.append(date)
+                        }
                     } else {
-                        stats.insulin.basalUnits += units
-                        deliveredBasalUnits += units
+                        // Temp basals (suspends and resumes carry 0). The
+                        // scheduled basal is added after the loop.
+                        stats.insulin.tempBasalUnits += units
                     }
-                    if line.automatic == true { stats.insulin.automaticUnits += units }
                 }
 
             case "meal":
                 stats.meals.entryCount += 1
                 stats.meals.totalGrams += line.grams ?? 0
-                let eaten = line.eatenAt.flatMap { HistoryTimestamp.formatter.date(from: $0) }
+                // ⚠️ `eatenAt` IS ONLY WRITTEN BY THE MEAL SCREEN. An ordinary carb
+                // entry has no such field, and its own time (`at`, the time set
+                // in the carb entry) IS when it was eaten. Requiring `eatenAt`
+                // left every post-meal figure standing on the handful of meals
+                // that came through the meal screen: 8 of 209 in one real log.
+                let recordedEatingTime = line.eatenAt.flatMap { HistoryTimestamp.formatter.date(from: $0) }
+                let eaten = recordedEatingTime ?? date
                 let entered = line.enteredAt.flatMap { HistoryTimestamp.formatter.date(from: $0) }
                 var delay: TimeInterval?
-                if let eaten, let entered {
-                    let gap = entered.timeIntervalSince(eaten)
+                // A logging delay only exists where the eating time was recorded
+                // SEPARATELY from the entry. For an ordinary entry `at` is simply
+                // when it was saved, give or take seconds, and calling that
+                // "logged promptly" would be reading a habit into a default.
+                if let recordedEatingTime, let entered {
+                    let gap = entered.timeIntervalSince(recordedEatingTime)
                     // Negative means logged in advance, which is a different
                     // habit entirely — don't average the two together.
                     if gap >= 0 {
@@ -655,15 +754,21 @@ struct HistoryStatistics {
                         loggingDelays.append(gap)
                     }
                 }
-                if let eaten {
-                    mealEvents.append((eaten, delay))
-                    if let grams = line.grams, grams > 0 { mealSizes.append((eaten, grams)) }
-                }
+                mealEntries.append((eaten, line.grams ?? 0, delay))
+                // A meal explains a rise for as long as it is absorbing, and for
+                // two hours at the least.
+                mealSpans.append((eaten, eaten.addingTimeInterval(max(2 * 3600, line.absorption ?? 0))))
 
             case "pod":
                 stats.pods.count += 1
                 if let hours = line.hoursRun { podHours.append(hours) }
-                stats.pods.wastedUnits += line.remainingAtStop ?? 0
+                if let remaining = line.remainingAtStop {
+                    if remaining > BasalDelivery.podReservoirReadingLimit {
+                        stats.pods.overfullCount += 1
+                    } else {
+                        stats.pods.wastedUnits += remaining
+                    }
+                }
                 let reason = line.stopReason ?? "unknown"
                 stopReasonCounts[reason, default: 0] += 1
                 if reason == "fault" { faultCount += 1 }
@@ -673,8 +778,13 @@ struct HistoryStatistics {
             }
         }
 
-        stats.firstDate = earliest
-        stats.lastDate = latest
+        // ⚠️ THE SPAN IS THE RECORDING, NOT THE OLDEST DATE MENTIONED. The first
+        // pod record of a log is dated when that pod stopped, a day or more
+        // before the first reading, and using it stretched the span: "sensor
+        // data" was measured against a day the log did not cover, and the day the
+        // log began at 22:47 counted as a whole day of insulin.
+        stats.firstDate = activeFrom ?? earliest
+        stats.lastDate = activeTo ?? latest
 
         stats.glucose = glucoseSummary(glucoseValues, overnight: overnight, daytime: daytime)
 
@@ -716,10 +826,44 @@ struct HistoryStatistics {
         // every overnight percentage the same way a partial day dilutes a daily
         // average.
         let countedNights = Set(nightReadings.filter { $0.value >= Self.minimumReadingsPerNight }.keys)
-        stats.nights = Nights(total: countedNights.count,
-                              withLow: nightsWithLow.intersection(countedNights).count)
 
         let sortedGlucose = glucoseSeries.sorted { $0.date < $1.date }
+        // ⚠️ ONE DEFINITION OF "A LOW" FOR THE WHOLE SCREEN: the consensus event
+        // (15 minutes or more under 70). Nights with a low, lows followed by a
+        // high and the bedtime outcomes each used to count any single reading
+        // under 70, next to a Low Events tile that did not, so the same screen
+        // reported 74 lows in one place and 32 in another.
+        let lowIntervals = excursions(sortedGlucose, threshold: 70, below: true)
+        for low in lowIntervals {
+            // A low belongs to a night when any of it falls inside 00:00–06:00.
+            for moment in [low.start, low.end] {
+                let night = calendar.startOfDay(for: moment)
+                guard let nightEnd = calendar.date(bySettingHour: 6, minute: 0, second: 0, of: night) else { continue }
+                if low.start < nightEnd && low.end >= night { nightsWithLow.insert(night) }
+            }
+        }
+        stats.nights = Nights(total: countedNights.count,
+                              withLow: nightsWithLow.intersection(countedNights).count)
+        // ⚠️ ENTRIES ARE NOT MEALS. One meal is often logged as two or three
+        // entries a few minutes apart (the main dish, then the dessert); each
+        // used to be measured as a meal of its own, so one glucose rise was
+        // counted two or three times, once per entry. Entries within half an
+        // hour of a meal's first entry are that meal: grams add up, the time is
+        // the first one. Entry COUNTS ("meals per day") still count entries.
+        var mealEvents: [(eaten: Date, delay: TimeInterval?)] = []
+        var mealSizes: [(eaten: Date, grams: Double)] = []
+        for entry in mealEntries.sorted(by: { $0.eaten < $1.eaten }) {
+            if let last = mealEvents.indices.last,
+               entry.eaten.timeIntervalSince(mealEvents[last].eaten) <= mealMergeWindow {
+                mealSizes[last].grams += entry.grams
+                if mealEvents[last].delay == nil { mealEvents[last].delay = entry.delay }
+            } else {
+                mealEvents.append((entry.eaten, entry.delay))
+                mealSizes.append((entry.eaten, entry.grams))
+            }
+        }
+        mealSizes.removeAll { $0.grams <= 0 }
+        let mealEntryTimes = mealEntries.map(\.eaten)
         stats.postMeal = postMealSummary(meals: mealEvents, glucose: sortedGlucose)
 
         // ⚠️ A DAY HAS TO EARN ITS PLACE IN THE DENOMINATOR. Counting any day
@@ -731,11 +875,34 @@ struct HistoryStatistics {
         let countedDays = Set(glucosePerDay.filter { $0.value >= Self.minimumReadingsForCountedDay }.keys)
             .union(eventDays)
         stats.daysWithData = countedDays.count
+        stats.dayEquivalents = dayEquivalents(of: countedDays, from: activeFrom, to: activeTo, calendar: calendar)
         let days = stats.dayCount
-        stats.lowEvents = lowEventSummary(sortedGlucose, days: days)
-        stats.highEvents = highEventSummary(sortedGlucose, days: days)
+
+        // Basal: temp basals as recorded, plus the schedule for the rest of the
+        // time — over the days that count, so it has the same days as the
+        // denominator it is divided by.
+        stats.insulin.basalUnits = stats.insulin.tempBasalUnits
+        if !basalSchedule.isEmpty, let earliest = activeFrom, let latest = activeTo {
+            let delivery = BasalDelivery(lines: lines, schedule: basalSchedule, calendar: calendar)
+            var scheduled = 0.0
+            for day in countedDays {
+                let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
+                scheduled += delivery.scheduledUnitsDelivered(from: max(day, earliest), to: min(dayEnd, latest))
+            }
+            stats.insulin.basalUnits += scheduled
+            stats.insulin.includesScheduledBasal = true
+        }
+        stats.insulin.totalUnits = stats.insulin.bolusUnits + stats.insulin.basalUnits
+        // Events per week are per week of SENSOR time: a day the sensor was off
+        // is not a day without a low.
+        let sensorDays = max(1, Double(sortedGlucose.count) / 288)
+        stats.lowEvents = lowEventSummary(sortedGlucose, lows: lowIntervals, days: sensorDays)
+        stats.highEvents = highEventSummary(sortedGlucose, days: sensorDays)
         stats.days = daySummary(sortedGlucose, calendar: calendar)
-        stats.dawn = dawnSummary(sortedGlucose, calendar: calendar)
+        stats.dawn = dawnSummary(sortedGlucose,
+                                 meals: mealEntryTimes,
+                                 manualBoluses: manualBolusTimes,
+                                 calendar: calendar)
         // A 5-minute sensor yields ~288 readings a day. Measured against the
         // SPAN, deliberately: a day with no readings at all is exactly what this
         // number is supposed to notice.
@@ -754,10 +921,10 @@ struct HistoryStatistics {
             stats.risk.griHyperComponent = griParts.hyper
         }
         stats.mealWindows = mealWindowSummary(meals: mealEvents, glucose: sortedGlucose, calendar: calendar)
-        stats.recovery = recoverySummary(sortedGlucose)
+        stats.recovery = recoverySummary(sortedGlucose, lows: lowIntervals)
         stats.weekdayProfile = weekdaySummary(sortedGlucose, calendar: calendar)
         stats.weeklyTrend = weeklySummary(sortedGlucose, calendar: calendar)
-        stats.bedtimeOutcomes = bedtimeSummary(sortedGlucose, calendar: calendar)
+        stats.bedtimeOutcomes = bedtimeSummary(sortedGlucose, lows: lowIntervals, calendar: calendar)
         stats.mealSizeOutcomes = mealSizeSummary(meals: mealSizes, glucose: sortedGlucose)
         stats.sensorGaps = sensorGapSummary(sortedGlucose)
         func average(_ values: [Double]) -> Double? {
@@ -791,11 +958,17 @@ struct HistoryStatistics {
         stats.loopActivity = LoopActivity(
             automaticDosesPerDay: days > 0 ? Double(automaticDoses) / days : 0,
             manualBolusesPerDay: days > 0 ? Double(manualBoluses) / days : 0,
-            deliveredBasalPerDay: days > 0 ? deliveredBasalUnits / days : 0,
-            scheduledBasalPerDay: scheduledBasalPerDay)
+            deliveredBasalPerDay: days > 0 ? stats.insulin.basalUnits / days : 0,
+            automaticBolusUnitsPerDay: days > 0 ? stats.insulin.automaticBolusUnits / days : 0,
+            scheduledBasalPerDay: basalSchedule.isEmpty ? scheduledBasalPerDay : BasalDelivery.dailyTotal(of: basalSchedule),
+            includesScheduledBasal: stats.insulin.includesScheduledBasal)
 
-        stats.missedBolus = missedBolusSummary(sortedGlucose, meals: mealEvents,
-                                               boluses: bolusTimes, days: days)
+        // ⚠️ THE USER'S OWN BOLUSES ONLY. Loop gives an automatic bolus every few
+        // minutes, so with those in the list there was "a bolus nearby" for
+        // almost every rise and the count sat near zero whatever happened: 3 in
+        // 58 days, where 21 rises had neither carbs nor a bolus of the user's.
+        stats.missedBolus = missedBolusSummary(sortedGlucose, meals: mealSpans,
+                                               boluses: manualBolusTimes, days: sensorDays)
         stats.mealsPerDay = days > 0 ? Double(stats.meals.entryCount) / days : 0
         stats.gramsPerMeal = stats.meals.entryCount > 0
             ? stats.meals.totalGrams / Double(stats.meals.entryCount)
@@ -803,7 +976,8 @@ struct HistoryStatistics {
 
         stats.insulin.dailyAverage = days > 0 ? stats.insulin.totalUnits / days : 0
         stats.meals.dailyAverageGrams = days > 0 ? stats.meals.totalGrams / days : 0
-        stats.meals.medianLoggingDelay = median(loggingDelays)
+        // A median of a handful of entries is not "typical" anything.
+        stats.meals.medianLoggingDelay = loggingDelays.count >= minimumMealsForLoggingDelay ? median(loggingDelays) : nil
 
         if stats.pods.count > 0 {
             stats.pods.meanHours = podHours.isEmpty ? 0 : podHours.reduce(0, +) / Double(podHours.count)
@@ -814,6 +988,31 @@ struct HistoryStatistics {
         }
 
         return stats
+    }
+
+    /// The counted days as a length of time: whole days, except that the first
+    /// and the last count only from the first record and up to the last one.
+    private static func dayEquivalents(of countedDays: Set<Date>,
+                                       from earliest: Date?,
+                                       to latest: Date?,
+                                       calendar: Calendar) -> Double {
+        var total = Double(countedDays.count)
+        guard let earliest, let latest, latest > earliest else { return total }
+        let firstDay = calendar.startOfDay(for: earliest)
+        let lastDay = calendar.startOfDay(for: latest)
+        func length(of day: Date) -> TimeInterval {
+            (calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)).timeIntervalSince(day)
+        }
+        if firstDay == lastDay {
+            return countedDays.contains(firstDay) ? latest.timeIntervalSince(earliest) / length(of: firstDay) : total
+        }
+        if countedDays.contains(firstDay) {
+            total -= min(1, max(0, earliest.timeIntervalSince(firstDay) / length(of: firstDay)))
+        }
+        if countedDays.contains(lastDay) {
+            total -= 1 - min(1, max(0, latest.timeIntervalSince(lastDay) / length(of: lastDay)))
+        }
+        return total
     }
 
     private static func glucoseSummary(_ values: [Double],
@@ -884,15 +1083,22 @@ struct HistoryStatistics {
                     baseline = sorted[candidate].value
                 }
             }
-            guard let baseline else { continue }
+            // Carbs eaten while low are a treatment, and the rise after them is
+            // the treatment working — not a post-meal spike.
+            guard let baseline, baseline >= 70 else { continue }
 
+            // ⚠️ THE PEAK IS LOOKED FOR IN THE 3 HOURS THE SCREEN SAYS, and the
+            // return under 180 for up to 5. The peak used to be searched for the
+            // whole 5 hours under a caption that said 3, so "typically peaks
+            // after" could read 4 h, and usually belonged to the NEXT meal.
+            let peakEnd = meal.eaten.addingTimeInterval(postMealWindow)
             let windowEnd = meal.eaten.addingTimeInterval(5 * 3600)
             var peak: Double?
             var peakDate: Date?
             var returnedAt: Date?
             var sawPeak = false
             while index < sorted.count && sorted[index].date <= windowEnd {
-                if peak == nil || sorted[index].value > peak! {
+                if sorted[index].date <= peakEnd, peak == nil || sorted[index].value > peak! {
                     peak = sorted[index].value
                     peakDate = sorted[index].date
                 }
@@ -944,81 +1150,100 @@ struct HistoryStatistics {
 
     /// Hypoglycemic events per the consensus definition — see `LowEvents`.
     private static func lowEventSummary(_ glucose: [(date: Date, value: Double)],
+                                        lows: [Excursion],
                                         days: Double) -> LowEvents {
         var events = LowEvents()
-        let level1 = excursions(glucose, threshold: 70, below: true)
-        events.count = level1.count
+        events.count = lows.count
         events.level2Count = excursions(glucose, threshold: 54, below: true).count
-        if !level1.isEmpty {
-            events.averageDuration = level1.reduce(0, +) / Double(level1.count)
+        if !lows.isEmpty {
+            events.averageDuration = lows.reduce(0) { $0 + $1.duration } / Double(lows.count)
         }
-        events.perWeek = days > 0 ? Double(level1.count) / days * 7 : 0
+        events.perWeek = days > 0 ? Double(lows.count) / days * 7 : 0
         return events
     }
 
     private static func highEventSummary(_ glucose: [(date: Date, value: Double)],
                                          days: Double) -> HighEvents {
         var events = HighEvents()
-        let durations = excursions(glucose, threshold: 250, below: false)
-        events.count = durations.count
-        if !durations.isEmpty {
-            events.averageDuration = durations.reduce(0, +) / Double(durations.count)
+        let highs = excursions(glucose, threshold: 250, below: false)
+        events.count = highs.count
+        if !highs.isEmpty {
+            events.averageDuration = highs.reduce(0) { $0 + $1.duration } / Double(highs.count)
         }
-        events.perWeek = days > 0 ? Double(durations.count) / days * 7 : 0
+        events.perWeek = days > 0 ? Double(highs.count) / days * 7 : 0
         return events
     }
 
-    /// Durations of every excursion past `threshold`, using the consensus rule:
-    /// at least 15 consecutive minutes beyond it to START an event, and at least
-    /// 15 consecutive minutes back to END one.
-    private static func excursions(_ glucose: [(date: Date, value: Double)],
-                                   threshold: Double,
-                                   below: Bool) -> [TimeInterval] {
-        guard glucose.count >= 2 else { return [] }
-        let minimum: TimeInterval = 15 * 60
+    /// One excursion past a threshold: its first and its last reading beyond it.
+    struct Excursion {
+        let start: Date
+        let end: Date
+        var duration: TimeInterval { end.timeIntervalSince(start) }
+    }
 
-        var durations: [TimeInterval] = []
+    /// Every excursion past `threshold`, using the consensus rule: at least 15
+    /// CONSECUTIVE minutes beyond it to start an event, and at least 15
+    /// consecutive minutes back to end one.
+    ///
+    /// ⚠️ THREE THINGS THIS USED TO GET WRONG, each found on real data:
+    ///  • "Consecutive" was not enforced. A run that had not yet lasted 15
+    ///    minutes kept its start time through a short recovery, so two separate
+    ///    low readings 25 minutes apart (67, 78, 82, 84, 69, 64) became a
+    ///    25-minute event. A run now ends the moment glucose is back, unless it
+    ///    had already become an event.
+    ///  • Readings are five minutes apart give or take a few seconds, so four in
+    ///    a row can span 899 seconds and fail a 900-second test. A minute of
+    ///    tolerance is allowed.
+    ///  • A sensor gap was bridged: sparse readings either side of a 55-minute
+    ///    hole were one four-hour low. A gap now ends whatever was open.
+    static func excursions(_ glucose: [(date: Date, value: Double)],
+                           threshold: Double,
+                           below: Bool) -> [Excursion] {
+        guard glucose.count >= 2 else { return [] }
+        let minimum: TimeInterval = 15 * 60 - 60
+
+        var events: [Excursion] = []
         var runStart: Date?       // start of the current beyond-threshold run
         var runEnd: Date?         // last sample still beyond it
         var recoveredAt: Date?    // first sample back inside
         var inEvent = false
+        var previous: Date?
 
         func beyond(_ value: Double) -> Bool { below ? value < threshold : value > threshold }
+        func close() {
+            if inEvent, let start = runStart, let end = runEnd { events.append(Excursion(start: start, end: end)) }
+            inEvent = false
+            runStart = nil
+            runEnd = nil
+            recoveredAt = nil
+        }
 
         for sample in glucose {
+            if let previous, sample.date.timeIntervalSince(previous) > sensorGapThreshold { close() }
+            previous = sample.date
+
             if beyond(sample.value) {
                 recoveredAt = nil
                 if runStart == nil { runStart = sample.date }
                 runEnd = sample.date
                 // Promote the run to a real event once it has lasted long enough.
-                if !inEvent, let start = runStart,
-                   sample.date.timeIntervalSince(start) >= minimum {
+                if !inEvent, let start = runStart, sample.date.timeIntervalSince(start) >= minimum {
                     inEvent = true
                 }
-            } else {
-                if recoveredAt == nil { recoveredAt = sample.date }
+            } else if inEvent {
                 // Only close the event after a sustained return, so one stray
                 // in-range reading mid-low doesn't split it into two events.
-                if inEvent, let recovered = recoveredAt,
-                   sample.date.timeIntervalSince(recovered) >= minimum,
-                   let start = runStart, let end = runEnd {
-                    durations.append(end.timeIntervalSince(start))
-                    inEvent = false
-                    runStart = nil
-                    runEnd = nil
-                } else if !inEvent, let recovered = recoveredAt,
-                          sample.date.timeIntervalSince(recovered) >= minimum {
-                    // The run never qualified; discard it.
-                    runStart = nil
-                    runEnd = nil
-                }
+                if recoveredAt == nil { recoveredAt = sample.date }
+                if let recovered = recoveredAt, sample.date.timeIntervalSince(recovered) >= minimum { close() }
+            } else {
+                // The run never qualified, and it is over.
+                runStart = nil
+                runEnd = nil
             }
         }
         // An event still open at the end of the window still counts.
-        if inEvent, let start = runStart, let end = runEnd {
-            durations.append(end.timeIntervalSince(start))
-        }
-        return durations
+        close()
+        return events
     }
 
     /// Per-day time in range, and what follows from it: days meeting the 70%
@@ -1037,9 +1262,8 @@ struct HistoryStatistics {
             inRangeByDay[day] = entry
         }
 
-        // Days with very few readings would otherwise score 100% off three
-        // lucky samples, so require a quarter of a day's worth.
-        let usable = inRangeByDay.filter { $0.value.total >= 72 }
+        // A day is judged on most of itself — see `minimumReadingsForJudgedDay`.
+        let usable = inRangeByDay.filter { $0.value.total >= minimumReadingsForJudgedDay }
         summary.counted = usable.count
         guard !usable.isEmpty else { return summary }
 
@@ -1076,57 +1300,69 @@ struct HistoryStatistics {
             summary.weekendInRange = weekend.reduce(0, +) / Double(weekend.count)
         }
 
-        // Longest consecutive run of goal days.
+        // Longest run of goal days IN A ROW. A day with no usable data between
+        // two goal days breaks the run: Monday and Wednesday are not two days
+        // in a row because Tuesday's sensor was off.
         var streak = 0
         var best = 0
+        var previousDay: Date?
         for day in usable.keys.sorted() {
+            let isNextDay = previousDay.map { calendar.dateComponents([.day], from: $0, to: day).day == 1 } ?? false
             if goalDays.contains(day) {
-                streak += 1
+                streak = isNextDay ? streak + 1 : 1
                 best = max(best, streak)
             } else {
                 streak = 0
             }
+            previousDay = day
         }
         summary.bestStreak = best
         return summary
     }
 
-    /// Dawn phenomenon: the 03:00 → 08:00 change, averaged over days that have a
-    /// reading near both times.
+    /// Dawn phenomenon: the change from 03:00 to 08:00, averaged over the days
+    /// that can show it.
+    ///
+    /// ⚠️ EACH END IS THE MEDIAN OF THE HOUR AROUND IT (02:30–03:30, 07:30–08:30),
+    /// not the single nearest reading, which put one sensor wobble at each end
+    /// straight into the figure. And a morning with food or a bolus of the user's
+    /// own between 02:00 and 08:00 is left out: what that morning shows is the
+    /// breakfast or the correction, not the dawn.
     private static func dawnSummary(_ glucose: [(date: Date, value: Double)],
+                                    meals: [Date],
+                                    manualBoluses: [Date],
                                     calendar: Calendar) -> Dawn {
         var dawn = Dawn()
         guard !glucose.isEmpty else { return dawn }
 
-        var byDay: [Date: (early: Double?, earlyGap: TimeInterval, late: Double?, lateGap: TimeInterval)] = [:]
+        var early: [Date: [Double]] = [:]
+        var late: [Date: [Double]] = [:]
         for sample in glucose {
+            let parts = calendar.dateComponents([.hour, .minute], from: sample.date)
+            let minutes = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
             let day = calendar.startOfDay(for: sample.date)
-            guard let threeAM = calendar.date(byAdding: .hour, value: 3, to: day),
-                  let eightAM = calendar.date(byAdding: .hour, value: 8, to: day) else { continue }
-            var entry = byDay[day] ?? (nil, .greatestFiniteMagnitude, nil, .greatestFiniteMagnitude)
-
-            let earlyGap = abs(sample.date.timeIntervalSince(threeAM))
-            if earlyGap <= 30 * 60 && earlyGap < entry.earlyGap {
-                entry.early = sample.value
-                entry.earlyGap = earlyGap
-            }
-            let lateGap = abs(sample.date.timeIntervalSince(eightAM))
-            if lateGap <= 30 * 60 && lateGap < entry.lateGap {
-                entry.late = sample.value
-                entry.lateGap = lateGap
-            }
-            byDay[day] = entry
+            if minutes >= 150 && minutes < 210 { early[day, default: []].append(sample.value) }
+            if minutes >= 450 && minutes < 510 { late[day, default: []].append(sample.value) }
         }
 
-        let rises = byDay.values.compactMap { entry -> Double? in
-            guard let early = entry.early, let late = entry.late else { return nil }
-            return late - early
+        var disturbed = Set<Date>()
+        for moment in meals + manualBoluses {
+            let hour = calendar.component(.hour, from: moment)
+            if hour >= 2 && hour < 8 { disturbed.insert(calendar.startOfDay(for: moment)) }
+        }
+
+        var rises: [Double] = []
+        for (day, before) in early where !disturbed.contains(day) {
+            // Half of each hour at least, so neither end rests on a stray reading.
+            guard before.count >= 6, let after = late[day], after.count >= 6 else { continue }
+            rises.append(percentile(after.sorted(), 0.5) - percentile(before.sorted(), 0.5))
         }
         guard !rises.isEmpty else { return dawn }
         dawn.daysMeasured = rises.count
         dawn.averageRise = rises.reduce(0, +) / Double(rises.count)
         return dawn
     }
+
 
     /// Linear-interpolated percentile of an already-sorted array.
     private static func percentile(_ sorted: [Double], _ fraction: Double) -> Double {
@@ -1191,9 +1427,10 @@ struct HistoryStatistics {
                 baseline = glucose[candidate].value
             }
         }
-        guard let baseline else { return nil }
+        // Same rule as `postMealSummary`: carbs eaten while low are a treatment.
+        guard let baseline, baseline >= 70 else { return nil }
 
-        let windowEnd = time.addingTimeInterval(3 * 3600)
+        let windowEnd = time.addingTimeInterval(postMealWindow)
         var peak: Double?
         while index < glucose.count && glucose[index].date <= windowEnd {
             if peak == nil || glucose[index].value > peak! { peak = glucose[index].value }
@@ -1209,45 +1446,39 @@ struct HistoryStatistics {
     /// within two hours usually means it was over-corrected, and that is a
     /// pattern worth seeing because time-in-range alone reports it as two
     /// separate problems rather than one cause.
-    private static func recoverySummary(_ glucose: [(date: Date, value: Double)]) -> Recovery {
+    private static func recoverySummary(_ glucose: [(date: Date, value: Double)],
+                                        lows: [Excursion]) -> Recovery {
         var recovery = Recovery()
         guard glucose.count >= 3 else { return recovery }
 
-        // Low events → did a high follow?
-        var index = 0
+        // Low events → did a high follow within two hours of the low ending?
+        let dates = glucose.map(\.date)
         var reboundCount = 0
-        var lowCount = 0
-        while index < glucose.count {
-            guard glucose[index].value < 70 else { index += 1; continue }
-            // Walk to the end of this low run.
-            var end = index
-            while end + 1 < glucose.count && glucose[end + 1].value < 70 { end += 1 }
-            lowCount += 1
-            let deadline = glucose[end].date.addingTimeInterval(2 * 3600)
-            var probe = end + 1
-            var rebounded = false
+        for low in lows {
+            let deadline = low.end.addingTimeInterval(2 * 3600)
+            var probe = lowerBound(dates, low.end) + 1
             while probe < glucose.count && glucose[probe].date <= deadline {
-                if glucose[probe].value > 180 { rebounded = true; break }
+                if glucose[probe].value > 180 { reboundCount += 1; break }
                 probe += 1
             }
-            if rebounded { reboundCount += 1 }
-            index = end + 1
         }
-        recovery.lowsAnalysed = lowCount
-        if lowCount >= 3 {
-            recovery.lowsFollowedByHigh = Double(reboundCount) / Double(lowCount)
+        recovery.lowsAnalysed = lows.count
+        if lows.count >= 3 {
+            recovery.lowsFollowedByHigh = Double(reboundCount) / Double(lows.count)
         }
 
+        var index = 0
         // High excursions → how long back under 180?
         var durations: [TimeInterval] = []
-        index = 0
         while index < glucose.count {
             guard glucose[index].value > 250 else { index += 1; continue }
             let start = glucose[index].date
             var probe = index + 1
             var recovered: Date?
             while probe < glucose.count {
-                if glucose[probe].value < 180 { recovered = glucose[probe].date; break }
+                // 180 itself is in range everywhere else on the screen, so it is
+                // "back in range" here too.
+                if glucose[probe].value <= 180 { recovered = glucose[probe].date; break }
                 probe += 1
             }
             if let recovered {
@@ -1283,7 +1514,7 @@ struct HistoryStatistics {
         }
 
         var byWeekday: [Int: [Double]] = [:]
-        for (day, counts) in byDay where counts.total >= 72 {
+        for (day, counts) in byDay where counts.total >= minimumReadingsForJudgedDay {
             let weekday = calendar.component(.weekday, from: day)
             byWeekday[weekday, default: []].append(Double(counts.inRange) / Double(counts.total))
         }
@@ -1334,21 +1565,29 @@ struct HistoryStatistics {
             byDay[day] = entry
         }
 
-        var byWeek: [Date: [Double]] = [:]
-        for (day, counts) in byDay where counts.total >= 72 {
+        // ⚠️ POOLED READINGS, THE SAME WAY "COMPARE PERIODS" DOES IT, and the same
+        // per-day floor. This used to average each day's percentage instead, so
+        // the two tiles showed the same week as 71% and 69% on one screen.
+        var byWeek: [Date: (inRange: Int, total: Int, days: Int)] = [:]
+        for (day, counts) in byDay where counts.total >= minimumReadingsForCountedDay {
             guard let week = calendar.dateInterval(of: .weekOfYear, for: day)?.start else { continue }
-            byWeek[week, default: []].append(Double(counts.inRange) / Double(counts.total))
+            var entry = byWeek[week] ?? (0, 0, 0)
+            entry.inRange += counts.inRange
+            entry.total += counts.total
+            entry.days += 1
+            byWeek[week] = entry
         }
 
         // Three days is the floor for calling something a week; below that the
         // point swings wildly and reads as a trend that isn't there.
         return byWeek
-            .filter { $0.value.count >= 3 }
+            .filter { $0.value.days >= 3 }
             .map { WeekPoint(weekStart: $0.key,
-                             inRange: $0.value.reduce(0, +) / Double($0.value.count),
-                             days: $0.value.count) }
+                             inRange: Double($0.value.inRange) / Double($0.value.total),
+                             days: $0.value.days) }
             .sorted { $0.weekStart < $1.weekStart }
     }
+
 
     /// Glucose summarised per week or per month, for the comparison tile.
     ///
@@ -1358,9 +1597,14 @@ struct HistoryStatistics {
     /// bar in it, which is not a comparison.
     ///
     /// Read-only, like everything else on this screen.
-    static func periodSummary(from lines: [HistoryLine],
+    static func periodSummary(from rawLines: [HistoryLine],
                               granularity: PeriodGranularity,
                               calendar: Calendar = .current) -> [PeriodPoint] {
+        // ⚠️ SAME DE-DUPLICATION AS `compute`, WHICH THIS USED TO SKIP. The log
+        // repeats readings, unevenly, so a month here did not match the same
+        // month's headline: September read 76.3% in range from 8,899 readings
+        // against 77.1% from the 8,191 that are really there.
+        let lines = HistoryLineDeduplicator.deduplicated(rawLines)
         // Same per-day floor as `weeklySummary`: 72 readings is six hours at the
         // usual five-minute cadence. A day with a handful of readings is not a
         // day you can average.
@@ -1411,12 +1655,13 @@ struct HistoryStatistics {
     /// Buckets are wide and only reported when each has enough nights to mean
     /// something. Descriptive only — see `BedtimeOutcome`.
     private static func bedtimeSummary(_ glucose: [(date: Date, value: Double)],
+                                       lows: [Excursion],
                                        calendar: Calendar) -> [BedtimeOutcome] {
         guard glucose.count >= 100 else { return [] }
 
         // night key -> (bedtime reading, whether a low followed before 06:00,
         // and how many readings there were AFTER midnight — see the floor below)
-        var nights: [Date: (bedtime: Double?, gap: TimeInterval, low: Bool, afterMidnight: Int)] = [:]
+        var nights: [Date: (bedtime: Double?, gap: TimeInterval, bedtimeAt: Date?, afterMidnight: Int)] = [:]
 
         for sample in glucose {
             let hour = calendar.component(.hour, from: sample.date)
@@ -1432,7 +1677,7 @@ struct HistoryStatistics {
                 continue
             }
 
-            var entry = nights[nightStart] ?? (nil, .greatestFiniteMagnitude, false, 0)
+            var entry = nights[nightStart] ?? (nil, .greatestFiniteMagnitude, nil, 0)
             if hour < 6 { entry.afterMidnight += 1 }
             if hour >= 22 || hour < 1 {
                 guard let elevenPM = calendar.date(byAdding: .hour, value: 23, to: nightStart) else { continue }
@@ -1440,9 +1685,9 @@ struct HistoryStatistics {
                 if gap <= 60 * 60 && gap < entry.gap {
                     entry.bedtime = sample.value
                     entry.gap = gap
+                    entry.bedtimeAt = sample.date
                 }
             }
-            if sample.value < 70 { entry.low = true }
             nights[nightStart] = entry
         }
 
@@ -1457,15 +1702,21 @@ struct HistoryStatistics {
             // any window has a bedtime reading but no morning after it yet;
             // counting it as a night that did NOT go low quietly improves every
             // rate here. It needs real post-midnight coverage to be judged.
-            let matching = nights.values.filter { entry in
+            let matching = nights.filter { _, entry in
                 guard let bedtime = entry.bedtime,
                       entry.afterMidnight >= minimumReadingsPerNight else { return false }
                 return bucket.range.contains(bedtime)
             }
             guard matching.count >= 5 else { return nil }
-            let lows = matching.filter(\.low).count
+            // A low counts when it BEGINS after the bedtime reading and before
+            // 06:00: one already under way at bedtime is not what followed it.
+            let withLow = matching.filter { nightStart, entry in
+                guard let bedtimeAt = entry.bedtimeAt,
+                      let morning = calendar.date(byAdding: .hour, value: 30, to: nightStart) else { return false }
+                return lows.contains { $0.start > bedtimeAt && $0.start < morning }
+            }.count
             return BedtimeOutcome(label: bucket.label,
-                                  lowRate: Double(lows) / Double(matching.count),
+                                  lowRate: Double(withLow) / Double(matching.count),
                                   nights: matching.count)
         }
     }
@@ -1482,7 +1733,7 @@ struct HistoryStatistics {
             switch meal.grams {
             case ..<30:  label = NSLocalizedString("Under 30 g", comment: "Meal size bucket")
             case 30..<60: label = NSLocalizedString("30–60 g", comment: "Meal size bucket")
-            default:     label = NSLocalizedString("Over 60 g", comment: "Meal size bucket")
+            default:     label = NSLocalizedString("60 g or more", comment: "Meal size bucket")
             }
             guard let rise = riseAfter(meal.eaten, glucose: glucose, dates: dates) else { continue }
             buckets[label, default: []].append(rise)
@@ -1490,7 +1741,7 @@ struct HistoryStatistics {
 
         return [NSLocalizedString("Under 30 g", comment: "Meal size bucket"),
                 NSLocalizedString("30–60 g", comment: "Meal size bucket"),
-                NSLocalizedString("Over 60 g", comment: "Meal size bucket")]
+                NSLocalizedString("60 g or more", comment: "Meal size bucket")]
             .compactMap { label in
                 guard let values = buckets[label], values.count >= 3 else { return nil }
                 return MealSizeOutcome(label: label,
@@ -1506,7 +1757,7 @@ struct HistoryStatistics {
     /// deliberately conservative: a false "you forgot" is worse than a miss,
     /// because it teaches the user to distrust the number.
     private static func missedBolusSummary(_ glucose: [(date: Date, value: Double)],
-                                           meals: [(eaten: Date, delay: TimeInterval?)],
+                                           meals: [(eaten: Date, absorbedBy: Date)],
                                            boluses: [Date],
                                            days: Double) -> MissedBolus {
         var result = MissedBolus()
@@ -1526,7 +1777,10 @@ struct HistoryStatistics {
 
             if peak - start.value >= 60 {
                 let quietFrom = start.date.addingTimeInterval(-2 * 3600)
-                let explained = meals.contains { $0.eaten >= quietFrom && $0.eaten <= deadline }
+                // A slow meal is still the explanation three or four hours on;
+                // the flat two hours this used to allow called its late rise
+                // "unexplained".
+                let explained = meals.contains { $0.eaten <= deadline && $0.absorbedBy >= start.date }
                     || boluses.contains { $0 >= quietFrom && $0 <= deadline }
                 // One rise per 4 hours at most, so a long climb isn't counted
                 // once per reading along the way.
@@ -1566,74 +1820,289 @@ struct HistoryStatistics {
 // MARK: - Best time in range
 
 extension HistoryStatistics {
-    /// The best time in range over any run of consecutive calendar days.
+    /// The highest time in range the period on screen has ever shown.
     struct BestTimeInRange: Equatable {
         let fraction: Double
-        /// First and last calendar day of the run.
+        /// First and last calendar day of the period when it stood at this value.
         let firstDay: Date
         let lastDay: Date
+        /// The moment it stood at this value: the time of the reading that took
+        /// it there (or now, for the period on screen).
+        let achievedAt: Date
+        /// True when this IS the period on screen now.
+        let isCurrent: Bool
     }
 
-    /// A run only counts with at least 70% of its possible readings (288 a day),
-    /// the usual minimum for a CGM report, so a stretch with the sensor off for a
-    /// day cannot score well off the few readings it has.
+    /// A period only counts with at least 70% of the readings a 5-minute sensor
+    /// would have produced over the time it covers, the usual minimum for a CGM
+    /// report, so a stretch with the sensor off cannot score well off the few
+    /// readings it has.
     static let bestTimeInRangeMinimumCoverage = 0.7
+    /// Seconds between the readings of the sensor the coverage is measured against.
+    static let expectedReadingInterval: TimeInterval = 300
 
-    /// Best time in range for each run length in `windowDays`, from every line.
+    /// Best time in range for each period length in `windowDays`, from every line.
     ///
-    /// Uses the same 70–180 mg/dL rule and the same de-duplication as `compute`.
-    /// Runs are whole calendar days, the last one ending today, so the period on
-    /// screen (the last N days, today included) is always one of the candidates.
+    /// ⚠️ THE BEST OF WHAT THE SCREEN SHOWS, AT EVERY MOMENT IT COULD HAVE SHOWN IT.
+    /// The period on screen is the last N calendar days with today included, so
+    /// its value moves with every reading. This replays that same period as it
+    /// stood at the time of every reading in the log (and as it stands now), and
+    /// keeps the highest. It used to compare whole calendar days only, and to
+    /// demand 70% of N FULL days of readings, which had two consequences the
+    /// owner saw: a period that briefly stood above the "best" was forgotten by
+    /// the next day, and just after midnight the 3-day period (two days and a few
+    /// minutes old, sensor data 98%) was refused as "not enough sensor data"
+    /// while standing four points above the best. Now the best can never be
+    /// below a period on screen that has enough sensor data, and a value once
+    /// reached stays reached.
+    ///
+    /// Same 70–180 mg/dL rule and the same de-duplication as `compute`. Coverage
+    /// is measured over the time the period covered at that moment (see
+    /// `bestTimeInRangeMinimumCoverage`), which is what the Sensor Data tile
+    /// reports for a period that has data from its first day.
     static func bestTimeInRange(from rawLines: [HistoryLine],
                                 windowDays: [Int],
+                                now: Date = Date(),
                                 calendar: Calendar = .current) -> [Int: BestTimeInRange] {
-        var counts: [Date: (inRange: Int, total: Int)] = [:]
+        var readings: [(date: Date, inRange: Bool)] = []
         for line in HistoryLineDeduplicator.deduplicated(rawLines) {
-            guard line.t == "glucose", let mgdl = line.mgdl, let date = line.date else { continue }
-            let day = calendar.startOfDay(for: date)
-            var entry = counts[day] ?? (0, 0)
-            entry.total += 1
-            if mgdl >= 70 && mgdl <= 180 { entry.inRange += 1 }
-            counts[day] = entry
+            guard line.t == "glucose", let mgdl = line.mgdl, let date = line.date, date <= now else { continue }
+            readings.append((date, mgdl >= 70 && mgdl <= 180))
         }
-        guard let firstDay = counts.keys.min() else { return [:] }
+        guard !readings.isEmpty else { return [:] }
+        readings.sort { $0.date < $1.date }
 
-        // Every calendar day from the first reading to today, including empty ones,
-        // so a run is always N real days long.
-        var days: [(day: Date, inRange: Int, total: Int)] = []
-        let today = calendar.startOfDay(for: Date())
-        var day = firstDay
+        // In-range readings among the first k, so any stretch is one subtraction.
+        var inRangeBefore = [Int](repeating: 0, count: readings.count + 1)
+        for (index, reading) in readings.enumerated() {
+            inRangeBefore[index + 1] = inRangeBefore[index] + (reading.inRange ? 1 : 0)
+        }
+
+        // Every calendar day from the first reading to today, and the index of the
+        // first reading on or after each day's start.
+        var dayStarts: [Date] = []
+        let today = calendar.startOfDay(for: now)
+        var day = calendar.startOfDay(for: readings[0].date)
         while day <= today {
-            let entry = counts[day] ?? (0, 0)
-            days.append((day, entry.inRange, entry.total))
+            dayStarts.append(day)
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
             day = next
         }
+        var firstIndexOfDay = [Int](repeating: readings.count, count: dayStarts.count)
+        var dayOfReading = [Int](repeating: 0, count: readings.count)
+        var dayIndex = 0
+        for (index, reading) in readings.enumerated() {
+            while dayIndex + 1 < dayStarts.count && dayStarts[dayIndex + 1] <= reading.date { dayIndex += 1 }
+            dayOfReading[index] = dayIndex
+            if firstIndexOfDay[dayIndex] == readings.count { firstIndexOfDay[dayIndex] = index }
+        }
+        // A day with no readings starts where the next day with readings does.
+        for index in stride(from: dayStarts.count - 2, through: 0, by: -1) where firstIndexOfDay[index] == readings.count {
+            firstIndexOfDay[index] = firstIndexOfDay[index + 1]
+        }
 
         var result: [Int: BestTimeInRange] = [:]
-        for window in Set(windowDays) where window > 0 && window <= days.count {
-            let minimumReadings = Double(window * 288) * bestTimeInRangeMinimumCoverage
-            var inRange = 0
-            var total = 0
-            var best: BestTimeInRange?
-            for index in days.indices {
-                inRange += days[index].inRange
-                total += days[index].total
-                if index >= window {
-                    inRange -= days[index - window].inRange
-                    total -= days[index - window].total
-                }
-                guard index >= window - 1, Double(total) >= minimumReadings else { continue }
+        for window in Set(windowDays) where window > 0 {
+            /// The period of `window` calendar days ending on day `lastDayIndex`:
+            /// when it starts, and the first reading inside it.
+            func opening(_ lastDayIndex: Int) -> (start: Date, firstIndex: Int)? {
+                let firstDayIndex = lastDayIndex - (window - 1)
+                if firstDayIndex >= 0 { return (dayStarts[firstDayIndex], firstIndexOfDay[firstDayIndex]) }
+                // It opens before the log does: every reading so far is inside it.
+                guard let start = calendar.date(byAdding: .day, value: -(window - 1), to: dayStarts[lastDayIndex]) else { return nil }
+                return (start, 0)
+            }
+
+            var best: (fraction: Double, inRange: Int, total: Int, start: Date, lastDayIndex: Int, at: Date)?
+            /// The period as it stood at `moment`, holding the readings up to
+            /// (not including) `endIndex`.
+            func consider(lastDayIndex: Int, endIndex: Int, moment: Date) {
+                guard let opening = opening(lastDayIndex) else { return }
+                let total = endIndex - opening.firstIndex
+                let elapsed = moment.timeIntervalSince(opening.start)
+                guard total > 0, elapsed > 0 else { return }
+                let expected = elapsed / expectedReadingInterval
+                guard Double(total) >= bestTimeInRangeMinimumCoverage * expected else { return }
+                let inRange = inRangeBefore[endIndex] - inRangeBefore[opening.firstIndex]
                 let fraction = Double(inRange) / Double(total)
-                // `>=`, so a tie goes to the more recent run.
+                // `>=`, so a tie goes to the more recent moment.
                 if fraction >= (best?.fraction ?? -1) {
-                    best = BestTimeInRange(fraction: fraction,
-                                           firstDay: days[index - window + 1].day,
-                                           lastDay: days[index].day)
+                    best = (fraction, inRange, total, opening.start, lastDayIndex, moment)
                 }
             }
-            result[window] = best
+
+            for index in readings.indices {
+                consider(lastDayIndex: dayOfReading[index], endIndex: index + 1, moment: readings[index].date)
+            }
+            // The period on screen right now. Last, so that it wins a tie.
+            let todayIndex = dayStarts.count - 1
+            consider(lastDayIndex: todayIndex, endIndex: readings.count, moment: now)
+
+            guard let best else { continue }
+            // It is the period on screen when it holds exactly today's readings so
+            // far, whether it was reached now or at the latest reading.
+            var isCurrent = false
+            if best.lastDayIndex == todayIndex, let current = opening(todayIndex) {
+                isCurrent = best.total == readings.count - current.firstIndex
+                    && best.inRange == inRangeBefore[readings.count] - inRangeBefore[current.firstIndex]
+            }
+            result[window] = BestTimeInRange(fraction: best.fraction,
+                                             firstDay: max(best.start, dayStarts[0]),
+                                             lastDay: dayStarts[best.lastDayIndex],
+                                             achievedAt: best.at,
+                                             isCurrent: isCurrent)
         }
         return result
+    }
+}
+
+// MARK: - Basal delivered
+
+/// What the pump delivered as basal, rebuilt from the log and a basal schedule.
+///
+/// The log holds temp basals (with the units each delivered), suspends and
+/// resumes. It does not hold the programmed schedule the pump runs the rest of
+/// the time, so that part is the schedule's rate over every stretch that is
+/// neither under a temp basal nor suspended.
+///
+/// Checked against 21 pod sessions' own delivered totals (3,597 U): boluses plus
+/// this came to +0.1%; boluses plus temp basals alone, to -19.5%.
+///
+/// The schedule is the one in force today. A schedule changed during the period
+/// makes the earlier part an estimate.
+struct BasalDelivery {
+    /// The rate from `startOffset` seconds after local midnight until the next entry.
+    struct ScheduleEntry: Equatable {
+        let startOffset: TimeInterval
+        let unitsPerHour: Double
+    }
+
+    /// A pod reports its reservoir only up to this many units; above it, it
+    /// reports a fixed marker instead of an amount.
+    static let podReservoirReadingLimit = 50.0
+
+    private let schedule: [ScheduleEntry]
+    private let calendar: Calendar
+    /// Stretches the schedule was NOT running (a temp basal or a suspension),
+    /// merged and in time order.
+    private let offSchedule: [(start: Date, end: Date)]
+    /// Every temp basal with the units it delivered.
+    private let tempBasals: [(start: Date, end: Date, units: Double)]
+
+    /// - Parameter lines: de-duplicated, in file order.
+    init(lines: [HistoryLine], schedule: [ScheduleEntry], calendar: Calendar = .current) {
+        self.schedule = schedule.sorted { $0.startOffset < $1.startOffset }
+        self.calendar = calendar
+
+        var stretches: [(start: Date, end: Date)] = []
+        var temps: [(start: Date, end: Date, units: Double)] = []
+        var suspendedSince: Date?
+        var lastDate: Date?
+        for line in lines where line.t == "dose" {
+            guard let date = line.date else { continue }
+            lastDate = max(lastDate ?? date, date)
+            switch line.kind {
+            case "tempBasal":
+                if let end = line.endedAt.flatMap({ HistoryTimestamp.formatter.date(from: $0) }), end > date {
+                    stretches.append((date, end))
+                    temps.append((date, end, line.units ?? 0))
+                }
+            // ⚠️ PAIRED IN FILE ORDER. A suspend and its resume often carry the
+            // same second (every pod change writes one of each), so sorting them
+            // by time can put the resume first and leave the pump "suspended"
+            // until the next pod.
+            case "suspend":
+                if suspendedSince == nil { suspendedSince = date }
+            case "resume":
+                if let since = suspendedSince, date > since { stretches.append((since, date)) }
+                suspendedSince = nil
+            default:
+                break
+            }
+        }
+        // Still suspended at the end of the log: suspended until its last dose.
+        if let since = suspendedSince, let lastDate, lastDate > since { stretches.append((since, lastDate)) }
+
+        stretches.sort { $0.start < $1.start }
+        var merged: [(start: Date, end: Date)] = []
+        for stretch in stretches {
+            if let last = merged.indices.last, stretch.start <= merged[last].end {
+                merged[last].end = max(merged[last].end, stretch.end)
+            } else {
+                merged.append(stretch)
+            }
+        }
+        offSchedule = merged
+        tempBasals = temps.sorted { $0.start < $1.start }
+    }
+
+    /// Units delivered by temp basals from `start` to `end`; one that straddles
+    /// an edge counts for the part of it inside.
+    func tempBasalUnits(from start: Date, to end: Date) -> Double {
+        var total = 0.0
+        for temp in tempBasals {
+            if temp.end <= start { continue }
+            if temp.start >= end { break }
+            let inside = min(temp.end, end).timeIntervalSince(max(temp.start, start))
+            total += temp.units * inside / temp.end.timeIntervalSince(temp.start)
+        }
+        return total
+    }
+
+    /// Basal delivered from `start` to `end`, less what the schedule alone would
+    /// have given: negative when Loop held basal back.
+    func basalAgainstSchedule(from start: Date, to end: Date) -> Double {
+        tempBasalUnits(from: start, to: end) + scheduledUnitsDelivered(from: start, to: end) - scheduledUnits(from: start, to: end)
+    }
+
+    /// A day of the schedule, in units.
+    static func dailyTotal(of schedule: [ScheduleEntry]) -> Double {
+        let sorted = schedule.sorted { $0.startOffset < $1.startOffset }
+        var total = 0.0
+        for (index, entry) in sorted.enumerated() {
+            let end = index + 1 < sorted.count ? sorted[index + 1].startOffset : 86400
+            total += entry.unitsPerHour * max(0, end - entry.startOffset) / 3600
+        }
+        return total
+    }
+
+    /// What the schedule alone would deliver from `start` to `end`.
+    func scheduledUnits(from start: Date, to end: Date) -> Double {
+        guard !schedule.isEmpty, end > start else { return 0 }
+        var total = 0.0
+        var moment = start
+        while moment < end {
+            let day = calendar.startOfDay(for: moment)
+            let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
+            let offset = moment.timeIntervalSince(day)
+            // The entry in force at `moment` (the last one of the day before the first entry starts).
+            let index = schedule.lastIndex { $0.startOffset <= offset } ?? schedule.count - 1
+            var segmentEnd = nextDay
+            if let later = schedule.first(where: { $0.startOffset > offset }) {
+                segmentEnd = min(nextDay, day.addingTimeInterval(later.startOffset))
+            }
+            segmentEnd = min(segmentEnd, end)
+            guard segmentEnd > moment else { break }
+            total += schedule[index].unitsPerHour * segmentEnd.timeIntervalSince(moment) / 3600
+            moment = segmentEnd
+        }
+        return total
+    }
+
+    /// Scheduled basal actually delivered from `start` to `end`: the schedule,
+    /// less the stretches a temp basal or a suspension replaced it.
+    func scheduledUnitsDelivered(from start: Date, to end: Date) -> Double {
+        guard end > start else { return 0 }
+        var total = 0.0
+        var moment = start
+        for stretch in offSchedule {
+            if stretch.end <= moment { continue }
+            if stretch.start >= end { break }
+            if stretch.start > moment { total += scheduledUnits(from: moment, to: stretch.start) }
+            moment = max(moment, stretch.end)
+            if moment >= end { break }
+        }
+        if moment < end { total += scheduledUnits(from: moment, to: end) }
+        return total
     }
 }

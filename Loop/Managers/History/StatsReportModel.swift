@@ -563,9 +563,10 @@ extension StatsReportModel {
                              value: String(format: "%.1f · %@", risk.hbgi,
                                            band(risk.hbgi, [(4.5, "low"), (9.0, "moderate")], "high"))))
         if let adrr = risk.adrr {
-            tile.rows.append(Row(label: NSLocalizedString("Daily swing (ADRR)", comment: "Stat"),
-                                 value: String(format: "%.1f · %@", adrr,
-                                               band(adrr, [(20, "low"), (40, "moderate")], "high"))))
+            // No category: ADRR's published bands are for finger-stick data and
+            // read far too high on CGM data — see the screen's row.
+            tile.rows.append(Row(label: NSLocalizedString("Daily swing (ADRR, from CGM)", comment: "Stat"),
+                                 value: String(format: "%.1f", adrr)))
         }
         tile.caveat = NSLocalizedString("Categories are the conventional published bands, not a judgement about you.", comment: "Risk caveat")
         tiles.append(tile)
@@ -613,29 +614,42 @@ extension StatsReportModel {
 
         var activity = Tile(title: NSLocalizedString("How Hard Loop Is Working", comment: "Tile title"))
         activity.explanation = NSLocalizedString("How often the algorithm steps in, and how far it moves from the programmed basal.", comment: "Loop activity explanation")
+        // Same rows, labels and conditions as the screen's tile — see
+        // `HistoryStatisticsView.loopActivityTile`.
         activity.rows = [
-            Row(label: NSLocalizedString("Automatic doses per day", comment: "Stat"), value: String(format: "%.1f", stats.loopActivity.automaticDosesPerDay)),
+            Row(label: NSLocalizedString("Automatic boluses per day", comment: "Stat"), value: String(format: "%.1f", stats.loopActivity.automaticDosesPerDay)),
             Row(label: NSLocalizedString("Your own boluses per day", comment: "Stat"), value: String(format: "%.1f", stats.loopActivity.manualBolusesPerDay)),
-            Row(label: NSLocalizedString("Basal delivered per day", comment: "Stat"), value: String(format: "%.1f U", stats.loopActivity.deliveredBasalPerDay))
+            Row(label: stats.loopActivity.includesScheduledBasal
+                    ? NSLocalizedString("Basal delivered per day", comment: "Stat")
+                    : NSLocalizedString("Temp basal delivered per day", comment: "Stat"),
+                value: String(format: "%.1f U", stats.loopActivity.deliveredBasalPerDay))
         ]
         if let scheduled = stats.loopActivity.scheduledBasalPerDay {
-            activity.rows.append(Row(label: NSLocalizedString("Programmed basal", comment: "Stat"), value: String(format: "%.1f U", scheduled)))
+            activity.rows.append(Row(label: NSLocalizedString("Your programmed basal", comment: "Stat"), value: String(format: "%.1f U", scheduled)))
             if let ratio = stats.loopActivity.basalRatio {
-                activity.rows.append(Row(label: NSLocalizedString("Delivered vs programmed", comment: "Stat"), value: String(format: "%.0f%%", ratio * 100)))
+                activity.rows.append(Row(label: NSLocalizedString("Basal delivered vs programmed", comment: "Stat"), value: String(format: "%.0f%%", ratio * 100)))
             }
+        }
+        activity.rows.append(Row(label: NSLocalizedString("Loop's automatic boluses per day", comment: "Stat"),
+                                 value: String(format: "%.1f U", stats.loopActivity.automaticBolusUnitsPerDay)))
+        if let ratio = stats.loopActivity.loopRatio {
+            activity.rows.append(Row(label: NSLocalizedString("Basal + automatic boluses vs programmed", comment: "Stat"), value: String(format: "%.0f%%", ratio * 100)))
         }
         if stats.missedBolus.count > 0 {
             activity.rows.append(Row(label: NSLocalizedString("Unexplained rises", comment: "Stat"), value: "\(stats.missedBolus.count)"))
-            activity.caveat = NSLocalizedString("Climbs of 60 mg/dL or more within 90 minutes with no carbs or bolus logged nearby — usually a meal that was not recorded.", comment: "Missed bolus explanation")
+            activity.caveat = NSLocalizedString("Climbs of 60 mg/dL or more within 90 minutes with no carbs still absorbing and no bolus of your own nearby — often a meal that wasn't recorded.", comment: "Missed bolus explanation")
         }
         tiles.append(activity)
 
         var supply = Tile(title: NSLocalizedString("Insulin, Carbs & Supplies", comment: "Tile title"))
         supply.rows = [
             Row(label: NSLocalizedString("Insulin per day", comment: "Stat"), value: String(format: "%.1f U", stats.insulin.dailyAverage)),
-            Row(label: NSLocalizedString("Given as bolus", comment: "Stat"), value: String(format: "%.0f%%", stats.insulin.bolusShare * 100)),
-            Row(label: NSLocalizedString("Insulin Loop gave itself", comment: "Stat"),
-                value: String(format: "%.0f%%", stats.insulin.totalUnits > 0 ? stats.insulin.automaticUnits / stats.insulin.totalUnits * 100 : 0)),
+            Row(label: NSLocalizedString("Your own boluses", comment: "Stat"), value: String(format: "%.0f%%", stats.insulin.manualBolusShare * 100)),
+            Row(label: NSLocalizedString("Loop's automatic boluses", comment: "Stat"), value: String(format: "%.0f%%", stats.insulin.automaticBolusShare * 100)),
+            Row(label: stats.insulin.includesScheduledBasal
+                    ? NSLocalizedString("Basal", comment: "Stat")
+                    : NSLocalizedString("Temp basal (scheduled basal not counted)", comment: "Stat"),
+                value: String(format: "%.0f%%", stats.insulin.basalShare * 100)),
             Row(label: NSLocalizedString("Carbs per day", comment: "Stat"), value: String(format: "%.0f g", stats.meals.dailyAverageGrams)),
             Row(label: NSLocalizedString("Meals per day", comment: "Stat"), value: String(format: "%.1f", stats.mealsPerDay)),
             Row(label: NSLocalizedString("Carbs per meal", comment: "Stat"), value: String(format: "%.0f g", stats.gramsPerMeal))
@@ -653,6 +667,9 @@ extension StatsReportModel {
             supply.rows.append(Row(label: NSLocalizedString("Pod sessions", comment: "Stat"), value: "\(stats.pods.count)"))
             supply.rows.append(Row(label: NSLocalizedString("Average pod life", comment: "Stat"), value: String(format: "%.0f h", stats.pods.meanHours)))
             supply.rows.append(Row(label: NSLocalizedString("Insulin discarded", comment: "Stat"), value: String(format: "%.0f U", stats.pods.wastedUnits)))
+            if stats.pods.overfullCount > 0 {
+                supply.rows.append(Row(label: NSLocalizedString("Pods stopped with over 50 U left", comment: "Stat"), value: "\(stats.pods.overfullCount)"))
+            }
         }
         tiles.append(supply)
         return tiles
@@ -662,39 +679,63 @@ extension StatsReportModel {
 
     private static func reviewTiles(_ insights: TherapyInsights) -> [Tile] {
         var tile = Tile(title: NSLocalizedString("Settings Review", comment: "Tile title"))
-        tile.explanation = String(format: NSLocalizedString("Computed from ALL history, not the selected period — evidence about therapy settings must not move because a shorter window was picked. Based on %1$d clean fasting nights and %2$d eligible meals.", comment: "Review explanation"),
+        tile.explanation = String(format: NSLocalizedString("Computed from ALL history, not the selected period — evidence about therapy settings must not move because a shorter window was picked. Based on %1$d nights with a clean fasting stretch and %2$d eligible meals.", comment: "Review explanation"),
                                   insights.cleanNightCount, insights.cleanMealCount)
 
         for window in insights.basalWindows {
             let verdict: String
-            switch window.verdict {
-            case .steady:  verdict = NSLocalizedString("steady", comment: "Basal verdict")
-            case .rising:  verdict = NSLocalizedString("rising", comment: "Basal verdict")
-            case .falling: verdict = NSLocalizedString("falling", comment: "Basal verdict")
+            switch window.finding {
+            case .steady:         verdict = NSLocalizedString("steady", comment: "Basal verdict")
+            case .steadyWithMore: verdict = NSLocalizedString("steady, with Loop giving more than programmed", comment: "Basal verdict")
+            case .steadyWithLess: verdict = NSLocalizedString("steady, with Loop giving less than programmed", comment: "Basal verdict")
+            case .rising:         verdict = NSLocalizedString("rising", comment: "Basal verdict")
+            case .falling:        verdict = NSLocalizedString("falling", comment: "Basal verdict")
+            case .unclear:        verdict = NSLocalizedString("moved the way Loop pushed it", comment: "Basal verdict")
+            }
+            var value = String(format: NSLocalizedString("%1$@ · median %2$@%3$.0f mg/dL over %4$d nights", comment: "Basal window value"),
+                               verdict, window.medianDrift >= 0 ? "+" : "", window.medianDrift, window.cleanNights)
+            if let share = window.loopShare {
+                value += String(format: NSLocalizedString(" · Loop gave %.0f%% of programmed basal", comment: "Basal window: Loop's delivery"), share * 100)
             }
             tile.rows.append(Row(
                 label: String(format: NSLocalizedString("Overnight %1$02d:00–%2$02d:00", comment: "Basal window"),
                               window.startHour, window.endHour),
-                value: String(format: NSLocalizedString("%1$@ · median %2$@%3$.0f mg/dL over %4$d nights", comment: "Basal window value"),
-                              verdict, window.medianDrift >= 0 ? "+" : "", window.medianDrift, window.cleanNights)))
+                value: value))
         }
 
+        // ⚠️ THE SAME GATES AS THE SCREEN. This used to print an "observed"
+        // figure from any evidence at all — six corrections where the screen
+        // says it needs eight, and the user's own setting echoed back as an
+        // observation when no sensitivity was known — so the shared report
+        // published numbers the screen had decided were not fit to show.
         if let sensitivity = insights.sensitivity {
-            var value = String(format: NSLocalizedString("observed %.0f mg/dL per unit", comment: "ISF observed"), sensitivity.observed)
-            if let current = sensitivity.current {
-                value += String(format: NSLocalizedString(" · currently set to %.0f", comment: "ISF current"), current)
+            var value: String
+            if sensitivity.evidence.isSufficient {
+                value = String(format: NSLocalizedString("observed %.0f mg/dL per unit", comment: "ISF observed"), sensitivity.observed)
+                if let current = sensitivity.current {
+                    value += String(format: NSLocalizedString(" · currently set to %.0f", comment: "ISF current"), current)
+                }
+                value += String(format: NSLocalizedString(" · %d corrections", comment: "Evidence"), sensitivity.evidence.samples)
+            } else {
+                value = String(format: NSLocalizedString("not enough yet: %1$d isolated corrections of the %2$d needed", comment: "ISF insufficient, report"),
+                               sensitivity.evidence.samples, TherapyInsights.minimumCorrections)
             }
-            value += String(format: NSLocalizedString(" · %d corrections", comment: "Evidence"), sensitivity.evidence.samples)
             tile.rows.append(Row(label: NSLocalizedString("Correction factor", comment: "Stat"), value: value))
         }
 
         if let ratio = insights.carbRatio {
-            var value = String(format: NSLocalizedString("observed %.1f g per unit", comment: "Ratio observed"), ratio.observed)
-            if let current = ratio.current {
-                value += String(format: NSLocalizedString(" · currently set to %.1f", comment: "Ratio current"), current)
+            var value: String
+            if let observed = ratio.observed, ratio.suggested != nil {
+                value = String(format: NSLocalizedString("observed %.1f g per unit", comment: "Ratio observed"), observed)
+                if let current = ratio.current {
+                    value += String(format: NSLocalizedString(" · currently set to %.1f", comment: "Ratio current"), current)
+                }
+                value += String(format: NSLocalizedString(" · %1$d meals over %2$d days", comment: "Evidence"),
+                                ratio.evidence.samples, ratio.daysSpanned)
+            } else {
+                value = String(format: NSLocalizedString("not enough yet: %1$d clean bolused meals over %2$d days", comment: "Ratio insufficient, report"),
+                               ratio.evidence.samples, ratio.daysSpanned)
             }
-            value += String(format: NSLocalizedString(" · %1$d meals over %2$d days", comment: "Evidence"),
-                            ratio.evidence.samples, ratio.daysSpanned)
             tile.rows.append(Row(label: NSLocalizedString("Carb ratio", comment: "Stat"), value: value))
         }
 

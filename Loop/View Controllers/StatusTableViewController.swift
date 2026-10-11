@@ -2038,16 +2038,24 @@ final class StatusTableViewController: LoopChartsTableViewController {
         // Current therapy settings are READ here purely so the review screen can
         // show "your setting" beside "your data says". Nothing writes them back.
         let therapy = deviceManager.loopManager.therapySettings
-        let now = Date()
+        // The DAY'S AVERAGE of each schedule, not its value right now: the
+        // review compares them with evidence from every hour of the log, and
+        // "your setting" must not change with the time the screen is opened.
         let currentISF = therapy.insulinSensitivitySchedule?
-            .quantity(at: now).doubleValue(for: .milligramsPerDeciliter)
-        let currentCarbRatio = therapy.carbRatioSchedule?.value(at: now)
+            .averageQuantity().doubleValue(for: .milligramsPerDeciliter)
+        let currentCarbRatio = therapy.carbRatioSchedule?.averageValue()
         let scheduledBasal = therapy.basalRateSchedule?.total()
+        // The schedule itself, so the statistics can rebuild the scheduled basal
+        // the pump delivers but never reports.
+        let basalSchedule = (therapy.basalRateSchedule?.items ?? []).map {
+            BasalDelivery.ScheduleEntry(startOffset: $0.startTime, unitsPerHour: $0.value)
+        }
 
         let hostingController = DismissibleHostingController(
             rootView: HistoryStatisticsView(currentISF: currentISF,
                                             currentCarbRatio: currentCarbRatio,
                                             scheduledBasalPerDay: scheduledBasal,
+                                            basalSchedule: basalSchedule,
                                             showsDoneButton: true),
             isModalInPresentation: false)
         let navigationWrapper = UINavigationController(rootViewController: hostingController)

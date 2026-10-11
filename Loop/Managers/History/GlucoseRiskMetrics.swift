@@ -60,8 +60,8 @@ struct GlucoseRiskMetrics {
     /// means your days look alike, which is what makes anything predictable.
     var modd: Double?
 
-    /// J-index — combines level and variability into one figure.
-    /// Roughly: < 20 good, 20–30 fair, > 30 poor.
+    /// J-index (Wojcicki) — combines level and variability into one figure.
+    /// His scale: 10–20 ideal, 20–30 good, 30–40 poor, above 40 lack of control.
     var jIndex: Double?
 
     /// Glycemia Risk Index (Klonoff et al. 2022) — 0 to 100, lower is better.
@@ -134,8 +134,7 @@ struct GlucoseRiskMetrics {
             metrics.adrr = total / Double(adrrDays.count)
         }
 
-        metrics.mage = meanAmplitudeOfExcursions(glucose.map(\.value),
-                                                 standardDeviation: standardDeviation)
+        metrics.mage = meanAmplitudeOfExcursions(glucose, calendar: calendar)
         metrics.conga2 = conga(glucose, hours: 2)
         metrics.modd = meanOfDailyDifferences(glucose, calendar: calendar)
 
@@ -176,33 +175,86 @@ struct GlucoseRiskMetrics {
         return f < 0 ? (risk, 0) : (0, risk)
     }
 
-    /// MAGE: average amplitude of the peak-to-nadir swings larger than 1 SD.
+    /// Readings a day needs before its swings are measured: 70% of a day.
+    static let minimumReadingsPerMAGEDay = 202
+
+    /// MAGE (Service et al. 1970): the average size of the day's swings that are
+    /// larger than that day's own standard deviation, averaged over days.
     ///
-    /// Turning points are found first, then only the excursions that exceed one
-    /// standard deviation are averaged — that threshold is the whole point of the
-    /// metric, separating real swings from sensor noise.
-    private static func meanAmplitudeOfExcursions(_ values: [Double],
-                                                  standardDeviation: Double) -> Double? {
+    /// ⚠️ SMALL COUNTER-MOVES ARE MERGED, NOT COUNTED. The published method
+    /// ignores a wobble smaller than one SD inside a larger swing. This used to
+    /// take the difference between every pair of neighbouring turning points of
+    /// the raw five-minute trace instead, so one reading of sensor noise half-way
+    /// up a 150 mg/dL climb cut it into two smaller pieces (and a flat step in a
+    /// climb counted as a peak). On real data that read 103 where the published
+    /// method gives about 127. A swing here runs from a real trough to a real
+    /// peak: the smallest counter-move under one SD is removed, again and again,
+    /// until none is left.
+    private static func meanAmplitudeOfExcursions(_ glucose: [(date: Date, value: Double)],
+                                                  calendar: Calendar) -> Double? {
+        var byDay: [Date: [Double]] = [:]
+        for sample in glucose { byDay[calendar.startOfDay(for: sample.date), default: []].append(sample.value) }
+
+        var daily: [Double] = []
+        for values in byDay.values where values.count >= minimumReadingsPerMAGEDay {
+            let mean = values.reduce(0, +) / Double(values.count)
+            let deviation = sqrt(values.reduce(0) { $0 + pow($1 - mean, 2) } / Double(values.count))
+            if let amplitude = meanAmplitudeOfExcursions(values, standardDeviation: deviation) { daily.append(amplitude) }
+        }
+        guard !daily.isEmpty else { return nil }
+        return daily.reduce(0, +) / Double(daily.count)
+    }
+
+    /// One day's MAGE: the mean of its rises of at least one SD and the mean of
+    /// its falls of at least one SD, averaged.
+    static func meanAmplitudeOfExcursions(_ values: [Double], standardDeviation: Double) -> Double? {
         guard values.count >= 3, standardDeviation > 0 else { return nil }
 
-        // Local minima and maxima, keeping the series' direction changes only.
-        var turningPoints: [Double] = [values[0]]
-        for i in 1..<(values.count - 1) {
-            let previous = values[i - 1]
-            let current = values[i]
-            let next = values[i + 1]
-            if (current > previous && current >= next) || (current < previous && current <= next) {
-                turningPoints.append(current)
+        // Turning points: a flat stretch is one point, and only a strict peak or
+        // trough turns the trace.
+        var flat: [Double] = [values[0]]
+        for value in values.dropFirst() where value != flat[flat.count - 1] { flat.append(value) }
+        guard flat.count >= 2 else { return nil }
+        var points: [Double] = [flat[0]]
+        if flat.count > 2 {
+            for index in 1..<(flat.count - 1) {
+                let previous = flat[index - 1], current = flat[index], next = flat[index + 1]
+                if (current > previous && current > next) || (current < previous && current < next) {
+                    points.append(current)
+                }
             }
         }
-        turningPoints.append(values[values.count - 1])
-        guard turningPoints.count >= 2 else { return nil }
+        points.append(flat[flat.count - 1])
 
-        let amplitudes = zip(turningPoints, turningPoints.dropFirst())
-            .map { abs($1 - $0) }
-            .filter { $0 > standardDeviation }
-        guard !amplitudes.isEmpty else { return nil }
-        return amplitudes.reduce(0, +) / Double(amplitudes.count)
+        // Remove the smallest counter-move under one SD until none is left.
+        while points.count > 2 {
+            var smallest = 0
+            var smallestSize = Double.greatestFiniteMagnitude
+            for index in 0..<(points.count - 1) {
+                let size = abs(points[index + 1] - points[index])
+                if size < smallestSize { smallestSize = size; smallest = index }
+            }
+            if smallestSize >= standardDeviation { break }
+            if smallest == 0 {
+                points.removeFirst()
+            } else if smallest == points.count - 2 {
+                points.removeLast()
+            } else {
+                // Both ends of an inner counter-move go, joining its neighbours.
+                points.removeSubrange(smallest...(smallest + 1))
+            }
+        }
+
+        var rises: [Double] = []
+        var falls: [Double] = []
+        for (from, to) in zip(points, points.dropFirst()) {
+            let change = to - from
+            if change >= standardDeviation { rises.append(change) }
+            if -change >= standardDeviation { falls.append(-change) }
+        }
+        let sides = [rises, falls].filter { !$0.isEmpty }.map { $0.reduce(0, +) / Double($0.count) }
+        guard !sides.isEmpty else { return nil }
+        return sides.reduce(0, +) / Double(sides.count)
     }
 
     /// CONGA(n): standard deviation of the differences between readings exactly
@@ -245,7 +297,7 @@ struct GlucoseRiskMetrics {
                                                calendar: Calendar) -> Double? {
         guard glucose.count >= 10 else { return nil }
 
-        // (day, slot-of-day) → mean reading in that slot.
+        // (day, slot-of-day) → the last reading in that slot.
         var slots: [Date: [Int: Double]] = [:]
         for sample in glucose {
             let day = calendar.startOfDay(for: sample.date)

@@ -81,11 +81,12 @@ struct TherapyInsightsSection: View {
         tile {
             tileTitle(NSLocalizedString("Overnight Basal", comment: "Tile title"))
             if insights.basalWindows.isEmpty {
-                notEnoughData(String(format: NSLocalizedString("Needs at least %1$d clean nights (midnight–7am) with no food and no manual bolus in or before them. So far: %2$d.", comment: "Basal insufficient data"),
+                notEnoughData(String(format: NSLocalizedString("Needs at least %1$d clean stretches of the same part of the night (midnight–3am or 3am–7am): starting in range, with no food still absorbing and no bolus of your own in it or in the 4 hours before. So far: %2$d before 3am and %3$d after.", comment: "Basal insufficient data"),
                                      TherapyInsights.minimumNights,
-                                     insights.cleanNightCount))
+                                     insights.cleanEarlyNightCount,
+                                     insights.cleanLateNightCount))
             } else {
-                Text(String(format: NSLocalizedString("From %d nights between midnight and 7am with no food and no manual insulin in or before them, so the curve reflects basal alone. Automatic dosing keeps running — it is what the loop does every night — so read the direction here, not a rate.", comment: "Basal explanation"),
+                Text(String(format: NSLocalizedString("From %d nights. Each part of the night is judged on its own, and only when it starts in range with no food still absorbing and no bolus of your own in it or in the 4 hours before. Loop keeps dosing through the night and corrects a drift as it starts, so each part shows what glucose did AND how much Loop gave to get there. Read the direction, not a rate.", comment: "Basal explanation"),
                             insights.cleanNightCount))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -98,10 +99,10 @@ struct TherapyInsightsSection: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(window.half == 0
-                                     ? NSLocalizedString("First half of the night", comment: "Basal window")
-                                     : NSLocalizedString("Second half of the night", comment: "Basal window"))
+                                     ? NSLocalizedString("First part of the night", comment: "Basal window")
+                                     : NSLocalizedString("Second part of the night", comment: "Basal window"))
                                     .font(.subheadline.weight(.medium))
-                                Text(String(format: NSLocalizedString("around %1$02d:00–%2$02d:00", comment: "Approximate hours"),
+                                Text(String(format: NSLocalizedString("%1$02d:00–%2$02d:00", comment: "Hours of a part of the night"),
                                             window.startHour, window.endHour))
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
@@ -111,11 +112,12 @@ struct TherapyInsightsSection: View {
                                         window.medianDrift >= 0 ? "+" : "", window.medianDrift))
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
-                                .foregroundStyle(color(for: window.verdict))
+                                .foregroundStyle(color(for: window.finding))
                         }
                         Text(verdictText(window))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.bottom, 2)
                 }
@@ -127,25 +129,40 @@ struct TherapyInsightsSection: View {
         }
     }
 
-    private func color(for drift: TherapyInsights.Drift) -> Color {
-        switch drift {
-        case .steady:  return guidanceColors.acceptable
-        case .rising:  return guidanceColors.warning
-        case .falling: return guidanceColors.critical
+    private func color(for finding: TherapyInsights.Finding) -> Color {
+        switch finding {
+        case .steady, .unclear:                return guidanceColors.acceptable
+        case .rising, .steadyWithMore:         return guidanceColors.warning
+        case .falling, .steadyWithLess:        return guidanceColors.critical
         }
     }
 
+    /// The direction, how many nights it is the middle of, and what Loop gave
+    /// meanwhile — see `TherapyInsights.BasalWindow.finding` for why the three
+    /// are read together.
     private func verdictText(_ window: TherapyInsights.BasalWindow) -> String {
-        switch window.verdict {
+        let loop = window.loopShare.map {
+            String(format: NSLocalizedString(" Loop gave %.0f%% of your programmed basal over these hours (basal plus its automatic boluses).", comment: "Basal window: Loop's delivery"), $0 * 100)
+        } ?? ""
+        switch window.finding {
         case .steady:
-            return String(format: NSLocalizedString("Held steady across %d nights.", comment: "Basal steady"),
-                          window.cleanNights)
+            return String(format: NSLocalizedString("Held steady, typically, across %d nights.", comment: "Basal steady"),
+                          window.cleanNights) + loop
+        case .steadyWithMore:
+            return String(format: NSLocalizedString("Held steady across %d nights, but only with Loop adding insulin. Worth asking whether basal is low here.", comment: "Basal steady, Loop adding"),
+                          window.cleanNights) + loop
+        case .steadyWithLess:
+            return String(format: NSLocalizedString("Held steady across %d nights, but only with Loop holding insulin back. Worth asking whether basal is high here.", comment: "Basal steady, Loop holding back"),
+                          window.cleanNights) + loop
         case .rising:
-            return String(format: NSLocalizedString("Rose over this window on %d nights. Worth asking whether basal is low here.", comment: "Basal rising"),
-                          window.cleanNights)
+            return String(format: NSLocalizedString("Typically rose over these hours (%d nights). Worth asking whether basal is low here.", comment: "Basal rising"),
+                          window.cleanNights) + loop
         case .falling:
-            return String(format: NSLocalizedString("Fell over this window on %d nights. Worth asking whether basal is high here.", comment: "Basal falling"),
-                          window.cleanNights)
+            return String(format: NSLocalizedString("Typically fell over these hours (%d nights). Worth asking whether basal is high here.", comment: "Basal falling"),
+                          window.cleanNights) + loop
+        case .unclear:
+            return String(format: NSLocalizedString("Moved the way Loop was pushing it (%d nights), so this says nothing about basal either way.", comment: "Basal unclear"),
+                          window.cleanNights) + loop
         }
     }
 
@@ -160,14 +177,14 @@ struct TherapyInsightsSection: View {
                               suggested: sensitivity.suggested,
                               wasCapped: sensitivity.wasCapped,
                               unit: NSLocalizedString("mg/dL per unit", comment: "ISF unit"))
-                Text(String(format: NSLocalizedString("From %d corrections given with no food around them, starting above 150 mg/dL, watched for 4 hours.", comment: "ISF method"),
+                Text(String(format: NSLocalizedString("From %d corrections given with no food around them and no other bolus of your own within 4 hours, starting above 150 mg/dL, watched for 4 hours. The fall is divided by your bolus plus what Loop added or held back.", comment: "ISF method"),
                             sensitivity.evidence.samples))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 let have = insights.sensitivity?.evidence.samples ?? 0
-                notEnoughData(String(format: NSLocalizedString("Needs at least %1$d isolated corrections — a bolus with no carbs near it, from a high starting point. So far: %2$d.", comment: "ISF insufficient"),
+                notEnoughData(String(format: NSLocalizedString("Needs at least %1$d isolated corrections — a bolus of your own with no carbs and no other bolus of yours within 4 hours of it, from a high starting point. So far: %2$d. With Loop correcting highs by itself these are rare, so this may stay empty.", comment: "ISF insufficient"),
                                      TherapyInsights.minimumCorrections, have))
             }
         }
@@ -179,29 +196,40 @@ struct TherapyInsightsSection: View {
         tile {
             tileTitle(NSLocalizedString("Carb Ratio", comment: "Tile title"))
             if let ratio = insights.carbRatio,
-               ratio.evidence.isSufficient,
-               ratio.daysSpanned >= TherapyInsights.minimumMealDays,
+               let observed = ratio.observed,
                ratio.suggested != nil {
                 comparisonRow(current: ratio.current,
-                              observed: ratio.observed,
+                              observed: observed,
                               suggested: ratio.suggested,
                               wasCapped: ratio.wasCapped,
-                              unit: NSLocalizedString("grams per unit", comment: "Carb ratio unit"))
-                statLine(NSLocalizedString("Typical 5-hour change after a meal", comment: "Meal excursion"),
+                              unit: NSLocalizedString("grams per unit", comment: "Carb ratio unit"),
+                              decimals: 1)
+                statLine(NSLocalizedString("Typical change by the time a meal is absorbed", comment: "Meal excursion"),
                          String(format: "%@%.0f mg/dL",
                                 ratio.medianExcursion >= 0 ? "+" : "", ratio.medianExcursion))
-                Text(String(format: NSLocalizedString("From %1$d bolused meals over %2$d days. Meals with anything else in the following 5 hours are left out.", comment: "Carb ratio method"),
+                Text(String(format: NSLocalizedString("From %1$d bolused meals over %2$d days. Boluses of your own from 30 minutes before a meal to 45 minutes after count as its bolus; a meal with another bolus or more food before it has finished absorbing (4 hours at least) is left out. The insulin counted includes what Loop added or held back.", comment: "Carb ratio method"),
                             ratio.evidence.samples, ratio.daysSpanned))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if let ratio = insights.carbRatio, ratio.evidence.isSufficient,
+                      ratio.daysSpanned >= TherapyInsights.minimumMealDays, ratio.observed == nil {
+                // Enough meals, but the leftover rise cannot be turned into
+                // insulin without a sensitivity setting to convert it with.
+                statLine(NSLocalizedString("Typical change by the time a meal is absorbed", comment: "Meal excursion"),
+                         String(format: "%@%.0f mg/dL",
+                                ratio.medianExcursion >= 0 ? "+" : "", ratio.medianExcursion))
+                notEnoughData(String(format: NSLocalizedString("From %1$d bolused meals over %2$d days. Working out a ratio from them needs your insulin sensitivity setting, which this screen was opened without: open Statistics from the main screen.", comment: "Carb ratio: no ISF"),
+                                     ratio.evidence.samples, ratio.daysSpanned))
             } else {
                 let ratio = insights.carbRatio
-                notEnoughData(String(format: NSLocalizedString("Needs at least %1$d clean bolused meals spread over at least %2$d days. So far: %3$d meals over %4$d days.", comment: "Carb ratio insufficient"),
+                notEnoughData(String(format: NSLocalizedString("Needs at least %1$d clean bolused meals spread over at least %2$d days, on at least %3$d different days. So far: %4$d meals over %5$d days, on %6$d different days.", comment: "Carb ratio insufficient"),
                                      TherapyInsights.minimumMeals,
                                      TherapyInsights.minimumMealDays,
+                                     TherapyInsights.minimumDistinctMealDays,
                                      ratio?.evidence.samples ?? 0,
-                                     ratio?.daysSpanned ?? 0))
+                                     ratio?.daysSpanned ?? 0,
+                                     ratio?.distinctDays ?? 0))
             }
         }
     }
@@ -211,18 +239,22 @@ struct TherapyInsightsSection: View {
     /// Current vs observed vs a capped suggestion. The suggestion is always
     /// shown NEXT TO the current value, never alone, so it reads as a comparison
     /// rather than an answer.
+    ///
+    /// `decimals` matters for a carb ratio: 6.4 g/U shown as "6" reads as 25%
+    /// below a setting of 8, on a page that promises to stay within 20%.
     private func comparisonRow(current: Double?, observed: Double,
                                suggested: Double?, wasCapped: Bool,
-                               unit: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+                               unit: String, decimals: Int = 0) -> some View {
+        let format = "%.\(decimals)f"
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 0) {
                 valueColumn(NSLocalizedString("Your setting", comment: "Label"),
-                            current.map { String(format: "%.0f", $0) } ?? "—")
+                            current.map { String(format: format, $0) } ?? "—")
                 valueColumn(NSLocalizedString("Your data says", comment: "Label"),
-                            String(format: "%.0f", observed))
+                            String(format: format, observed))
                 if let suggested {
                     valueColumn(NSLocalizedString("To discuss", comment: "Label"),
-                                String(format: "%.0f", suggested),
+                                String(format: format, suggested),
                                 emphasised: true)
                 }
             }
@@ -271,11 +303,11 @@ struct TherapyInsightsSection: View {
         tile {
             tileTitle(NSLocalizedString("How This Is Worked Out", comment: "Tile title"))
             methodLine(NSLocalizedString("Basal", comment: "Method"),
-                       NSLocalizedString("Only from nights with no food or bolus for at least 4 hours beforehand and none during. Any night with a gap in sensor data is dropped rather than patched.", comment: "Basal method"))
+                       NSLocalizedString("Each part of the night (midnight–3am, 3am–7am) on its own, and only when it starts in range with no food still absorbing and no bolus of your own in it or in the 4 hours before. A part with a gap in sensor data is dropped rather than patched.", comment: "Basal method"))
             methodLine(NSLocalizedString("Sensitivity", comment: "Method"),
-                       NSLocalizedString("Only from corrections with no carbs on either side and no second bolus stacked on top.", comment: "ISF method detail"))
+                       NSLocalizedString("Only from corrections with no carbs on either side and no other bolus of your own within 4 hours before or after. The insulin counted is your bolus plus what Loop added or held back in those 4 hours.", comment: "ISF method detail"))
             methodLine(NSLocalizedString("Carb ratio", comment: "Method"),
-                       NSLocalizedString("Only from meals that were bolused for and followed by nothing else for 5 hours, and only once there are at least 30 days of them.", comment: "Ratio method detail"))
+                       NSLocalizedString("Only from meals that were bolused for and followed by nothing else until they have finished absorbing (4 hours at least), and only once there are at least 30 days of them. The insulin counted is your bolus plus what Loop added or held back.", comment: "Ratio method detail"))
             methodLine(NSLocalizedString("Limits", comment: "Method"),
                        NSLocalizedString("Any figure shown to discuss is held within 20% of your current setting, the same ceiling automatic tuning tools place on themselves.", comment: "Caps"))
             // The ordering caveat matters more than any single number here: a
@@ -284,7 +316,7 @@ struct TherapyInsightsSection: View {
             methodLine(NSLocalizedString("Read these in order", comment: "Method"),
                        NSLocalizedString("Basal first, then sensitivity, then carb ratio. Each one is only meaningful once the one before it is right — the carb ratio here is literally calculated through your sensitivity setting. If the basal section is flagging drift, treat the two below it as unreliable for now.", comment: "Dependency ordering"))
             methodLine(NSLocalizedString("Windows", comment: "Method"),
-                       NSLocalizedString("These use every night and meal in your log, not the period you picked on the statistics screen.", comment: "Windows"))
+                       NSLocalizedString("These use every night and meal in your log, not the period you picked on the statistics screen. \"Your setting\" is the average of your schedule over the day, and Loop's basal is worked out from your current basal schedule.", comment: "Windows"))
         }
     }
 

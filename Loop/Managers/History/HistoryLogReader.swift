@@ -40,6 +40,9 @@ struct HistoryLine: Decodable {
     let units: Double?
     let unitsPerHour: Double?
     let automatic: Bool?
+    /// When delivery finished; absent for an instant dose. For a temp basal that
+    /// was replaced early this is the shortened end, in the last record of it.
+    let endedAt: String?
 
     // pod
     let activatedAt: String?

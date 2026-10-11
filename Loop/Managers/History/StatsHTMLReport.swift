@@ -133,7 +133,9 @@ enum StatsHTMLReport {
         body += """
         <p class="scope">\(escape(id.ignoresPeriod
             ? NSLocalizedString("Computed from all recorded history, not a selected window.", comment: "Scope caption")
-            : String(format: NSLocalizedString("Covering the last %@.", comment: "Scope caption"), model.periodLongTitle)))</p>
+            : model.periodTitle == HistoryStatisticsViewModel.Period.all.title
+                ? NSLocalizedString("Covering all recorded history.", comment: "Scope caption for all data")
+                : String(format: NSLocalizedString("Covering the last %@.", comment: "Scope caption"), model.periodLongTitle)))</p>
         """
         if let section = model.sections.first(where: { $0.id == id }) {
             body += sectionHTML(section, showingTitle: false)
@@ -222,8 +224,8 @@ enum StatsHTMLReport {
                     // floor was not met rather than showing a lone bar and
                     // calling it a comparison.
                     let empty = granularity == "week"
-                        ? NSLocalizedString("Not enough history yet. A week needs at least 3 days with a full day of readings, and comparing needs 2 such weeks.", comment: "Comparison empty state")
-                        : NSLocalizedString("Not enough history yet. A month needs at least 10 days with a full day of readings, and comparing needs 2 such months.", comment: "Comparison empty state")
+                        ? NSLocalizedString("Not enough history yet. A week needs at least 3 days with 6 hours or more of readings, and comparing needs 2 such weeks.", comment: "Comparison empty state")
+                        : NSLocalizedString("Not enough history yet. A month needs at least 10 days with 6 hours or more of readings, and comparing needs 2 such months.", comment: "Comparison empty state")
                     content = "<p class=\"explain\">\(escape(empty))</p>"
                 } else {
                     content = svgColumns(chart) + comparisonTable(points)

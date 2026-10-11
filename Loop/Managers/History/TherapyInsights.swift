@@ -59,18 +59,49 @@ struct TherapyInsights {
         case falling
     }
 
+    /// Loop's delivery against the programmed basal over a block.
+    enum LoopLeaning {
+        case more
+        case about
+        case less
+    }
+
+    /// What a block of the night shows, with Loop's part taken into account.
+    enum Finding {
+        /// Held steady on about the programmed basal.
+        case steady
+        /// Held steady, but only with Loop giving clearly more than programmed.
+        case steadyWithMore
+        /// Held steady, but only with Loop giving clearly less than programmed.
+        case steadyWithLess
+        /// Rose, and not because Loop was holding back.
+        case rising
+        /// Fell, and not because Loop was adding.
+        case falling
+        /// Moved in the direction Loop was pushing it: says nothing about basal.
+        case unclear
+    }
+
     /// One block of the fasting night, assessed independently — basal needs can
     /// differ sharply between, say, 00:00–03:00 and 03:00–06:00 (dawn effect).
     struct BasalWindow: Identifiable {
-        /// Which half of the fasting window this is: 0 = first, 1 = second.
+        /// Which part of the night this is: 0 = 00:00–03:00, 1 = 03:00–07:00.
         let half: Int
-        /// Clock hours this half covers. Now that the window is fixed at
-        /// 00:00–07:00 these are the same every night (0–3, 3–7).
+        /// Clock hours this part covers, the same every night (0–3, 3–7).
         let startHour: Int
         let endHour: Int
         /// Median change across the block, mg/dL, over all clean nights.
         let medianDrift: Double
         let cleanNights: Int
+        /// What Loop delivered over those blocks (basal plus its automatic
+        /// boluses) as a fraction of the programmed basal for the same time; nil
+        /// when no basal schedule was given.
+        ///
+        /// ⚠️ THE OTHER HALF OF THE EVIDENCE. Loop corrects a drift as it starts,
+        /// so "glucose held steady" says little on its own: steady while Loop
+        /// gave 130% of the programmed basal is a different finding from steady
+        /// at 100%.
+        let loopShare: Double?
         var id: Int { half }
 
         /// ±30 mg/dL across a fasting window is the conventional "basal looks
@@ -80,12 +111,43 @@ struct TherapyInsights {
             if medianDrift < -30 { return .falling }
             return .steady
         }
+
+        /// What Loop was doing meanwhile, when that is known and clear-cut:
+        /// giving noticeably more than the programmed basal, or noticeably less.
+        var loopLeaning: LoopLeaning? {
+            guard let loopShare else { return nil }
+            if loopShare >= 1 + Self.loopLeaningMargin { return .more }
+            if loopShare <= 1 - Self.loopLeaningMargin { return .less }
+            return .about
+        }
+        static let loopLeaningMargin = 0.15
+
+        /// The direction and Loop's part in it, read together.
+        ///
+        /// ⚠️ THE DRIFT ALONE CAN POINT THE WRONG WAY. Glucose that falls while
+        /// Loop is giving MORE than the programmed basal is Loop correcting, not
+        /// basal set too high; glucose that rises while Loop holds back is Loop
+        /// recovering from something, not basal set too low. Only a drift that
+        /// happens DESPITE what Loop did, or a steady line that needed Loop to
+        /// lean hard one way, says something about the basal setting.
+        var finding: Finding {
+            switch (verdict, loopLeaning) {
+            case (.steady, .more?):   return .steadyWithMore
+            case (.steady, .less?):   return .steadyWithLess
+            case (.steady, _):        return .steady
+            case (.rising, .less?):   return .unclear
+            case (.rising, _):        return .rising
+            case (.falling, .more?):  return .unclear
+            case (.falling, _):       return .falling
+            }
+        }
     }
 
     // MARK: - Sensitivity / ratio
 
     struct SensitivityObservation {
-        /// mg/dL per unit, observed from isolated corrections.
+        /// mg/dL per unit, observed from isolated corrections: the fall over
+        /// four hours divided by the bolus plus what Loop added or held back.
         let observed: Double
         let current: Double?
         let evidence: Evidence
@@ -97,21 +159,21 @@ struct TherapyInsights {
     }
 
     struct RatioObservation {
-        /// Median grams-per-unit implied by meals that were bolused for.
-        let observed: Double
+        /// Median grams-per-unit implied by meals that were bolused for. Nil
+        /// when no sensitivity setting was given: the leftover excursion cannot
+        /// be turned into insulin without one, and the current setting must
+        /// never be shown back as an "observation".
+        let observed: Double?
         let current: Double?
         let evidence: Evidence
-        /// Median glucose change from the meal to 5 hours later.
+        /// Median glucose change from the meal to the end of its window (when
+        /// it has finished absorbing: 4 hours at least).
         let medianExcursion: Double
         let daysSpanned: Int
+        /// Different calendar days the meals fall on.
+        let distinctDays: Int
         let suggested: Double?
         let wasCapped: Bool
-    }
-
-    /// A stretch of time judged suitable for assessing basal.
-    struct FastingWindow {
-        let start: Date
-        let end: Date
     }
 
     var basalWindows: [BasalWindow] = []
@@ -121,6 +183,10 @@ struct TherapyInsights {
     /// Nights that were clean enough to assess basal at all. Reported because a
     /// low number is itself the finding: it means the data can't answer yet.
     var cleanNightCount = 0
+    /// Clean blocks of each part of the night, whether or not there are enough
+    /// of them to report: the "so far" in "needs at least five".
+    var cleanEarlyNightCount = 0
+    var cleanLateNightCount = 0
     /// Meals eligible for carb-ratio assessment.
     var cleanMealCount = 0
 
@@ -146,6 +212,17 @@ struct TherapyInsights {
     /// Carb ratio additionally requires this much calendar coverage — the user's
     /// own requirement, and a sound one: meals vary enormously week to week.
     static let minimumMealDays = 30
+    /// ...and on at least this many different days: two meals a month apart
+    /// would otherwise satisfy "30 days" on their own.
+    static let minimumDistinctMealDays = 10
+    /// Where the night is split. Each part is judged on its own.
+    static let nightSplitHour = 3
+    /// Boluses of the user's own this close to a meal are the bolus for it: one
+    /// given a little early, the rest once the plate is seen.
+    static let mealBolusLead: TimeInterval = 30 * 60
+    static let mealBolusLag: TimeInterval = 45 * 60
+    /// Carb entries this close to a meal's first entry are part of that meal.
+    static let mealMergeWindow: TimeInterval = 30 * 60
     /// Hard cap on how far a suggestion may sit from the current setting.
     static let maximumRelativeChange = 0.20
 
@@ -170,6 +247,7 @@ struct TherapyInsights {
     static func compute(from rawLines: [HistoryLine],
                         currentISF: Double? = nil,
                         currentCarbRatio: Double? = nil,
+                        basalSchedule: [BasalDelivery.ScheduleEntry] = [],
                         calendar: Calendar = .current) -> TherapyInsights {
         // Same de-duplication the statistics use: the log repeats events the
         // pump re-reports, and here a repeat is worse than a wrong total — a
@@ -179,8 +257,9 @@ struct TherapyInsights {
         var insights = TherapyInsights()
 
         var glucose: [(date: Date, value: Double)] = []
-        var meals: [(eaten: Date, grams: Double, clearsAt: Date)] = []
+        var entries: [(eaten: Date, grams: Double, clearsAt: Date)] = []
         var boluses: [(date: Date, units: Double)] = []
+        var automatic: [(date: Date, units: Double)] = []
 
         for line in lines {
             guard let date = line.date else { continue }
@@ -190,160 +269,189 @@ struct TherapyInsights {
             case "meal":
                 let eaten = line.eatenAt.flatMap { HistoryTimestamp.formatter.date(from: $0) } ?? date
                 if let grams = line.grams, grams > 0 {
-                    meals.append((eaten, grams, mealClearsAt(eaten: eaten, absorption: line.absorption)))
+                    entries.append((eaten, grams, mealClearsAt(eaten: eaten, absorption: line.absorption)))
                 }
             case "dose":
-                // ⚠️ MANUAL boluses ONLY — this is why the whole review used to
-                // report nothing at all.
+                // ⚠️ MANUAL boluses are the EVENTS; automatic ones are not.
                 //
-                // Temp basals were already excluded, but AUTOMATIC boluses were
-                // not, and on Automatic Bolus dosing the loop delivers one every
-                // five minutes around the clock. Every rule below is phrased as
-                // "no insulin near this window", so with automatic boluses in
-                // the list EVERY night was contaminated, EVERY correction had
+                // On Automatic Bolus dosing the loop delivers one every five
+                // minutes around the clock. Every rule below is phrased as "no
+                // insulin near this window", so with automatic boluses in that
+                // list EVERY night was contaminated, EVERY correction had
                 // another bolus stacked on it, and EVERY meal failed the
-                // exactly-one-bolus test. The screen was not short of data; it
-                // was disqualifying all of it.
+                // one-bolus test. The screen was not short of data; it was
+                // disqualifying all of it.
                 //
                 // Automatic dosing is a constant background presence, not an
-                // event that spoils a window, so it is not treated as
-                // contamination. What it does do is damp the drift the basal
-                // check measures — the loop corrects some of it — which is why
-                // that check reports a DIRECTION, never a rate.
-                if line.kind == "bolus", line.automatic != true,
-                   let units = line.units, units > 0 {
-                    boluses.append((date, units))
-                }
+                // event that spoils a window, so it does not disqualify one. It
+                // is still INSULIN, though, and it is counted wherever a figure
+                // divides by insulin — see `Loop.extraUnits`.
+                guard line.kind == "bolus", let units = line.units, units > 0 else { continue }
+                if line.automatic == true { automatic.append((date, units)) } else { boluses.append((date, units)) }
             default:
                 continue
             }
         }
 
         glucose.sort { $0.date < $1.date }
-        meals.sort { $0.eaten < $1.eaten }
         boluses.sort { $0.date < $1.date }
+        automatic.sort { $0.date < $1.date }
         guard glucose.count > 10 else { return insights }
 
-        let nights = cleanFastingNights(glucose: glucose, meals: meals,
-                                        boluses: boluses, calendar: calendar)
-        insights.cleanNightCount = nights.count
-        insights.basalWindows = basalWindows(from: nights, glucose: glucose)
+        // Entries a few minutes apart are one meal — see `mealMergeWindow`.
+        var meals: [(eaten: Date, grams: Double, clearsAt: Date)] = []
+        for entry in entries.sorted(by: { $0.eaten < $1.eaten }) {
+            if let last = meals.indices.last, entry.eaten.timeIntervalSince(meals[last].eaten) <= mealMergeWindow {
+                meals[last].grams += entry.grams
+                meals[last].clearsAt = max(meals[last].clearsAt, entry.clearsAt)
+            } else {
+                meals.append(entry)
+            }
+        }
+
+        let loop = Loop(automatic: automatic,
+                        delivery: basalSchedule.isEmpty ? nil : BasalDelivery(lines: lines, schedule: basalSchedule, calendar: calendar))
+
+        let nights = cleanNightBlocks(glucose: glucose, meals: meals, boluses: boluses, calendar: calendar)
+        insights.cleanEarlyNightCount = nights.filter { $0.part == 0 }.count
+        insights.cleanLateNightCount = nights.filter { $0.part == 1 }.count
+        insights.cleanNightCount = Set(nights.map(\.day)).count
+        insights.basalWindows = basalWindows(from: nights, loop: loop)
 
         insights.sensitivity = sensitivityObservation(glucose: glucose, meals: meals,
-                                                      boluses: boluses, current: currentISF)
-        insights.carbRatio = ratioObservation(glucose: glucose, meals: meals, boluses: boluses,
+                                                      boluses: boluses, loop: loop, current: currentISF)
+        insights.carbRatio = ratioObservation(glucose: glucose, meals: meals, boluses: boluses, loop: loop,
                                               currentISF: currentISF,
                                               currentRatio: currentCarbRatio,
                                               calendar: calendar)
+        insights.cleanMealCount = insights.carbRatio?.evidence.samples ?? 0
         return insights
     }
 
-    // MARK: - Basal, from clean fasting nights only
-
-    /// Fasting windows suitable for judging basal.
+    /// What Loop did by itself over a stretch of time.
     ///
-    /// One window per day, always 00:00–07:00 (`nightStartHour`/`nightEndHour`).
-    /// A window is DISCARDED, never corrected, if any of these hold — each means
-    /// the curve is measuring something other than basal:
-    ///   • a meal still absorbing into the window (its own absorption time, so
-    ///     slow carbs are respected — see `mealClearsAt`)
-    ///   • a MANUAL bolus in the 4 h before the window or during it (automatic
-    ///     dosing is not contamination — see the note in `compute`)
-    ///   • a CGM gap over 30 minutes
-    private static func cleanFastingNights(glucose: [(date: Date, value: Double)],
-                                           meals: [(eaten: Date, grams: Double, clearsAt: Date)],
-                                           boluses: [(date: Date, units: Double)],
-                                           calendar: Calendar) -> [FastingWindow] {
-        var candidates: [FastingWindow] = []
+    /// ⚠️ WHY THE SETTINGS FIGURES NEED THIS. "Glucose fell 90 after a 2 U
+    /// correction" is 45 per unit only if 2 U is all the insulin there was. In
+    /// one real log Loop added 4 U of automatic bolus to two such corrections and
+    /// held back 4 U of basal on another, and the 17 clean meals carried 39% more
+    /// insulin than the user's own bolus. Dividing by the manual bolus alone made
+    /// every "observed" figure wrong, in a direction that depends on what Loop
+    /// happened to do.
+    struct Loop {
+        let automatic: [(date: Date, units: Double)]
+        /// Nil without a basal schedule: only the automatic boluses are known.
+        let delivery: BasalDelivery?
 
-        var days = Set<Date>()
-        for sample in glucose { days.insert(calendar.startOfDay(for: sample.date)) }
-        for day in days {
-            guard let start = calendar.date(byAdding: .hour, value: nightStartHour, to: day),
-                  let end = calendar.date(byAdding: .hour, value: nightEndHour, to: day) else { continue }
-            candidates.append(FastingWindow(start: start, end: end))
+        func automaticUnits(from start: Date, to end: Date) -> Double {
+            automatic.reduce(0) { $1.date >= start && $1.date <= end ? $0 + $1.units : $0 }
         }
 
-        return candidates.sorted { $0.start < $1.start }.filter { window in
-            // A meal contaminates if it is still absorbing when the window opens.
-            let mealActive = meals.contains { $0.clearsAt > window.start && $0.eaten <= window.end }
-            if mealActive { return false }
-
-            let quietFrom = window.start.addingTimeInterval(-4 * 3600)
-            let bolusNear = boluses.contains { $0.date >= quietFrom && $0.date <= window.end }
-            if bolusNear { return false }
-
-            let inWindow = glucose.filter { $0.date >= window.start && $0.date <= window.end }
-            // ~4 h of 5-minute data inside the 7-hour window: a night that only
-            // half-reported is still usable, a night that barely reported is not.
-            guard inWindow.count >= 48 else { return false }
-            let largestGap = zip(inWindow, inWindow.dropFirst())
-                .map { $1.date.timeIntervalSince($0.date) }
-                .max() ?? 0
-            return largestGap <= 30 * 60
+        /// Automatic boluses, plus basal delivered above (or, negative, below)
+        /// the programmed schedule.
+        func extraUnits(from start: Date, to end: Date) -> Double {
+            automaticUnits(from: start, to: end) + (delivery?.basalAgainstSchedule(from: start, to: end) ?? 0)
         }
     }
 
-    /// Each fasting window is split into a first and second half and assessed
-    /// separately: needs commonly differ between early night and the pre-dawn
-    /// hours, and averaging the two hides exactly that difference.
-    private static func basalWindows(from nights: [FastingWindow],
-                                     glucose: [(date: Date, value: Double)]) -> [BasalWindow] {
-        guard nights.count >= minimumNights else { return [] }
+    // MARK: - Basal, from clean fasting blocks of the night only
 
-        var firstHalf: [Double] = []
-        var secondHalf: [Double] = []
-        var firstStarts: [Int] = []
-        var midHours: [Int] = []
-        var endHours: [Int] = []
-        let calendar = Calendar.current
+    /// One clean block of one night.
+    struct NightBlock {
+        let day: Date
+        /// 0 = 00:00 to `nightSplitHour`, 1 = from there to 07:00.
+        let part: Int
+        let start: Date
+        let end: Date
+        /// Glucose at the end less glucose at the start.
+        let drift: Double
+    }
 
-        for night in nights {
-            let midpoint = night.start.addingTimeInterval(night.end.timeIntervalSince(night.start) / 2)
-            if let a = nearestReading(to: night.start, in: glucose, tolerance: 15 * 60),
-               let b = nearestReading(to: midpoint, in: glucose, tolerance: 15 * 60) {
-                firstHalf.append(b - a)
+    /// The blocks of each night that are suitable for judging basal.
+    ///
+    /// ⚠️ EACH PART OF THE NIGHT IS JUDGED ON ITS OWN. The whole 00:00–07:00
+    /// window used to have to be clean, with no bolus of the user's from 20:00
+    /// on — so an ordinary dinner bolus at 20:30 threw away the whole night, and
+    /// 60 days of data produced three nights. The hours after 03:00 are clean
+    /// far more often than the hours after midnight, and they are judged
+    /// separately anyway.
+    ///
+    /// A block is DISCARDED, never corrected, if any of these hold — each means
+    /// the curve is measuring something other than basal:
+    ///   • a meal still absorbing into it (its own absorption time, so slow
+    ///     carbs are respected — see `mealClearsAt`)
+    ///   • a MANUAL bolus in the 4 h before it or during it
+    ///   • fewer than two thirds of its readings, or a CGM gap over 30 minutes
+    ///   • glucose outside 70–180 when it opens
+    private static func cleanNightBlocks(glucose: [(date: Date, value: Double)],
+                                         meals: [(eaten: Date, grams: Double, clearsAt: Date)],
+                                         boluses: [(date: Date, units: Double)],
+                                         calendar: Calendar) -> [NightBlock] {
+        var days = Set<Date>()
+        for sample in glucose { days.insert(calendar.startOfDay(for: sample.date)) }
+
+        var blocks: [NightBlock] = []
+        for day in days.sorted() {
+            let hours = [nightStartHour, nightSplitHour, nightEndHour]
+            for part in 0..<2 {
+                guard let start = calendar.date(bySettingHour: hours[part], minute: 0, second: 0, of: day),
+                      let end = calendar.date(bySettingHour: hours[part + 1], minute: 0, second: 0, of: day) else { continue }
+
+                // A meal contaminates if it is still absorbing when the block opens.
+                if meals.contains(where: { $0.clearsAt > start && $0.eaten <= end }) { continue }
+                let quietFrom = start.addingTimeInterval(-4 * 3600)
+                if boluses.contains(where: { $0.date >= quietFrom && $0.date <= end }) { continue }
+
+                let inside = glucose.filter { $0.date >= start && $0.date <= end }
+                let expected = end.timeIntervalSince(start) / 300
+                guard Double(inside.count) >= expected * 2 / 3 else { continue }
+                let largestGap = zip(inside, inside.dropFirst()).map { $1.date.timeIntervalSince($0.date) }.max() ?? 0
+                guard largestGap <= 30 * 60,
+                      let first = nearestReading(to: start, in: glucose, tolerance: 15 * 60),
+                      let last = nearestReading(to: end, in: glucose, tolerance: 15 * 60) else { continue }
+                // A basal test starts IN RANGE. A block that opens high is Loop
+                // bringing a high down, and one that opens low is a low being
+                // recovered from; neither says anything about basal.
+                guard first >= 70 && first <= 180 else { continue }
+                blocks.append(NightBlock(day: day, part: part, start: start, end: end, drift: last - first))
             }
-            if let b = nearestReading(to: midpoint, in: glucose, tolerance: 15 * 60),
-               let c = nearestReading(to: night.end, in: glucose, tolerance: 15 * 60) {
-                secondHalf.append(c - b)
+        }
+        return blocks
+    }
+
+    private static func basalWindows(from blocks: [NightBlock], loop: Loop) -> [BasalWindow] {
+        let hours = [nightStartHour, nightSplitHour, nightEndHour]
+        return (0..<2).compactMap { part in
+            let matching = blocks.filter { $0.part == part }
+            guard matching.count >= minimumNights else { return nil }
+            var loopShare: Double?
+            if let delivery = loop.delivery {
+                var delivered = 0.0
+                var programmed = 0.0
+                for block in matching {
+                    programmed += delivery.scheduledUnits(from: block.start, to: block.end)
+                    delivered += delivery.tempBasalUnits(from: block.start, to: block.end)
+                        + delivery.scheduledUnitsDelivered(from: block.start, to: block.end)
+                        + loop.automaticUnits(from: block.start, to: block.end)
+                }
+                if programmed > 0 { loopShare = delivered / programmed }
             }
-            // Collected across ALL nights so the label is a typical hour, not
-            // whichever night happened to be processed last.
-            firstStarts.append(calendar.component(.hour, from: night.start))
-            midHours.append(calendar.component(.hour, from: midpoint))
-            endHours.append(calendar.component(.hour, from: night.end))
+            return BasalWindow(half: part,
+                               startHour: hours[part], endHour: hours[part + 1],
+                               medianDrift: median(matching.map(\.drift)) ?? 0,
+                               cleanNights: matching.count,
+                               loopShare: loopShare)
         }
-
-        func typical(_ hours: [Int]) -> Int {
-            guard !hours.isEmpty else { return 0 }
-            return Int((median(hours.map(Double.init)) ?? 0).rounded())
-        }
-
-        var results: [BasalWindow] = []
-        if firstHalf.count >= minimumNights {
-            results.append(BasalWindow(half: 0,
-                                       startHour: typical(firstStarts), endHour: typical(midHours),
-                                       medianDrift: median(firstHalf) ?? 0,
-                                       cleanNights: firstHalf.count))
-        }
-        if secondHalf.count >= minimumNights {
-            results.append(BasalWindow(half: 1,
-                                       startHour: typical(midHours), endHour: typical(endHours),
-                                       medianDrift: median(secondHalf) ?? 0,
-                                       cleanNights: secondHalf.count))
-        }
-        return results
     }
 
     // MARK: - ISF, from isolated corrections only
 
     /// A correction is usable only if it is genuinely isolated: no carbs either
     /// side of it, an elevated and therefore measurable starting point, and no
-    /// further insulin or food during the observation window.
+    /// other insulin of the user's or food for four hours before or after.
     private static func sensitivityObservation(glucose: [(date: Date, value: Double)],
                                                meals: [(eaten: Date, grams: Double, clearsAt: Date)],
                                                boluses: [(date: Date, units: Double)],
+                                               loop: Loop,
                                                current: Double?) -> SensitivityObservation? {
         var observations: [Double] = []
 
@@ -356,9 +464,12 @@ struct TherapyInsights {
                 $0.clearsAt > bolus.date && $0.eaten <= windowEnd
             }
             if carbsNear { continue }
-            // No second MANUAL bolus stacking on top.
+            // No other MANUAL bolus stacking on top — and none still acting
+            // from before, which this used not to check: the fall then belongs
+            // to two boluses and was credited to one.
+            let windowStart = bolus.date.addingTimeInterval(-4 * 3600)
             let otherBolus = boluses.contains {
-                $0.date > bolus.date && $0.date <= windowEnd
+                $0.date != bolus.date && $0.date >= windowStart && $0.date <= windowEnd
             }
             if otherBolus { continue }
 
@@ -366,9 +477,12 @@ struct TherapyInsights {
                   start >= 150,
                   let end = nearestReading(to: windowEnd, in: glucose, tolerance: 20 * 60) else { continue }
 
+            // ALL the insulin that acted: the bolus, and what Loop added or
+            // held back. See `Loop`.
+            let insulin = bolus.units + loop.extraUnits(from: bolus.date, to: windowEnd)
             let drop = start - end
-            guard drop > 0 else { continue }
-            observations.append(drop / bolus.units)
+            guard drop > 0, insulin > 0.1 else { continue }
+            observations.append(drop / insulin)
         }
 
         let evidence = Evidence(samples: observations.count, required: minimumCorrections)
@@ -392,6 +506,7 @@ struct TherapyInsights {
     private static func ratioObservation(glucose: [(date: Date, value: Double)],
                                          meals: [(eaten: Date, grams: Double, clearsAt: Date)],
                                          boluses: [(date: Date, units: Double)],
+                                         loop: Loop,
                                          currentISF: Double?,
                                          currentRatio: Double?,
                                          calendar: Calendar) -> RatioObservation? {
@@ -399,22 +514,24 @@ struct TherapyInsights {
         var excursions: [Double] = []
         var firstMeal: Date?
         var lastMeal: Date?
+        var mealDays = Set<Date>()
 
         for meal in meals where meal.grams >= 20 {
-            // Watch a slow meal for as long as it is actually absorbing, not a
-            // flat 5 hours that would cut a 6-hour pizza off mid-curve.
-            let windowEnd = max(meal.eaten.addingTimeInterval(5 * 3600), meal.clearsAt)
+            // Watch the meal until it has finished absorbing: its own
+            // absorption time plus an hour, four hours at the least.
+            let windowEnd = meal.clearsAt
 
-            // Exactly one MANUAL bolus, close to the meal, and nothing else
-            // for 5 h. (Automatic boluses are excluded upstream; requiring
-            // exactly one of THOSE would never match on closed loop.)
-            let paired = boluses.filter {
-                abs($0.date.timeIntervalSince(meal.eaten)) <= 20 * 60
-            }
-            guard paired.count == 1, let bolus = paired.first, bolus.units > 0 else { continue }
-            let laterBolus = boluses.contains {
-                $0.date > bolus.date.addingTimeInterval(20 * 60) && $0.date <= windowEnd
-            }
+            // ⚠️ THE BOLUS FOR A MEAL IS OFTEN GIVEN IN PARTS. "Exactly one bolus
+            // within 20 minutes" threw out every meal bolused for in two goes;
+            // the parts given from half an hour before to 45 minutes after are
+            // one bolus, added up. Anything of the user's AFTER that is a
+            // correction, and the meal is left out.
+            let pairedFrom = meal.eaten.addingTimeInterval(-mealBolusLead)
+            let pairedUntil = meal.eaten.addingTimeInterval(mealBolusLag)
+            let paired = boluses.filter { $0.date >= pairedFrom && $0.date <= pairedUntil }
+            let bolusUnits = paired.reduce(0) { $0 + $1.units }
+            guard bolusUnits > 0 else { continue }
+            let laterBolus = boluses.contains { $0.date > pairedUntil && $0.date <= windowEnd }
             if laterBolus { continue }
             let laterMeal = meals.contains {
                 $0.eaten > meal.eaten && $0.eaten <= windowEnd
@@ -428,14 +545,16 @@ struct TherapyInsights {
             excursions.append(excursion)
             firstMeal = firstMeal.map { min($0, meal.eaten) } ?? meal.eaten
             lastMeal = lastMeal.map { max($0, meal.eaten) } ?? meal.eaten
+            mealDays.insert(calendar.startOfDay(for: meal.eaten))
 
             // Convert the leftover excursion into the insulin that would have
             // neutralised it, and from there to the ratio the meal implies.
             // Needs an ISF to translate mg/dL into units; without one we can
             // still report the excursion, just not a ratio.
             if let isf = currentISF, isf > 0 {
-                let extraUnits = excursion / isf
-                let impliedUnits = bolus.units + extraUnits
+                // The user's bolus AND what Loop added or held back — see `Loop`.
+                let given = bolusUnits + loop.extraUnits(from: meal.eaten, to: windowEnd)
+                let impliedUnits = given + excursion / isf
                 if impliedUnits > 0.1 {
                     impliedRatios.append(meal.grams / impliedUnits)
                 }
@@ -446,13 +565,15 @@ struct TherapyInsights {
         let daysSpanned = Int(last.timeIntervalSince(first) / 86400)
         let evidence = Evidence(samples: excursions.count, required: minimumMeals)
 
-        // BOTH gates must pass: enough meals AND enough calendar time. Fifteen
-        // meals inside one week is not 15 meals' worth of evidence about a
-        // setting that has to hold across a month of ordinary life.
+        // ALL the gates must pass: enough meals, enough calendar time, and
+        // enough different days. Fifteen meals inside one week is not 15 meals'
+        // worth of evidence about a setting that has to hold across a month of
+        // ordinary life.
         let hasEnoughData = evidence.isSufficient && daysSpanned >= minimumMealDays
-        let observed = median(impliedRatios) ?? currentRatio ?? 0
-        let capped = hasEnoughData && !impliedRatios.isEmpty
-            ? cap(observed, toward: currentRatio)
+            && mealDays.count >= minimumDistinctMealDays
+        let observed = median(impliedRatios)
+        let capped = hasEnoughData && observed != nil
+            ? cap(observed ?? 0, toward: currentRatio)
             : (value: nil as Double?, wasCapped: false)
 
         return RatioObservation(observed: observed,
@@ -460,6 +581,7 @@ struct TherapyInsights {
                                 evidence: evidence,
                                 medianExcursion: median(excursions) ?? 0,
                                 daysSpanned: daysSpanned,
+                                distinctDays: mealDays.count,
                                 suggested: capped.value,
                                 wasCapped: capped.wasCapped)
     }

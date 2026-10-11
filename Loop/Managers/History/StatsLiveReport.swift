@@ -78,9 +78,11 @@ final class StatsLiveReport: ObservableObject {
 
     private static let enabledKey = "com.loopkit.Loop.statsLiveReportEnabled"
     private static let lastWrittenKey = "com.loopkit.Loop.statsLiveReportLastWritten"
-    private static let isfKey = "com.loopkit.Loop.statsLiveReportISF"
-    private static let ratioKey = "com.loopkit.Loop.statsLiveReportCarbRatio"
-    private static let basalKey = "com.loopkit.Loop.statsLiveReportBasal"
+    private nonisolated static let isfKey = "com.loopkit.Loop.statsLiveReportISF"
+    private nonisolated static let ratioKey = "com.loopkit.Loop.statsLiveReportCarbRatio"
+    private nonisolated static let basalKey = "com.loopkit.Loop.statsLiveReportBasal"
+    /// The basal schedule as a flat list: start offset, rate, start offset, rate…
+    private nonisolated static let basalScheduleKey = "com.loopkit.Loop.statsLiveReportBasalSchedule"
 
     /// Opt-in, like the history log itself. Nothing is written until the patient
     /// turns it on.
@@ -197,11 +199,30 @@ final class StatsLiveReport: ObservableObject {
     /// happens before anyone opens the statistics screen. Three numbers the user
     /// already sees on their own settings screens — nothing sensitive is being
     /// introduced to `UserDefaults` here.
-    func rememberSettings(currentISF: Double?, currentCarbRatio: Double?, scheduledBasalPerDay: Double?) {
+    func rememberSettings(currentISF: Double?, currentCarbRatio: Double?, scheduledBasalPerDay: Double?,
+                          basalSchedule: [BasalDelivery.ScheduleEntry] = []) {
         let defaults = UserDefaults.standard
         if let currentISF { defaults.set(currentISF, forKey: Self.isfKey) }
         if let currentCarbRatio { defaults.set(currentCarbRatio, forKey: Self.ratioKey) }
         if let scheduledBasalPerDay { defaults.set(scheduledBasalPerDay, forKey: Self.basalKey) }
+        if !basalSchedule.isEmpty {
+            defaults.set(basalSchedule.flatMap { [$0.startOffset, $0.unitsPerHour] }, forKey: Self.basalScheduleKey)
+        }
+    }
+
+    /// What `rememberSettings` last stored: for a refresh with no screen open,
+    /// and for a statistics screen opened without its settings.
+    nonisolated static func rememberedSettings()
+    -> (currentISF: Double?, currentCarbRatio: Double?, scheduledBasalPerDay: Double?, basalSchedule: [BasalDelivery.ScheduleEntry]) {
+        let defaults = UserDefaults.standard
+        let flat = defaults.array(forKey: basalScheduleKey) as? [Double] ?? []
+        let schedule = stride(from: 0, to: flat.count - 1, by: 2).map {
+            BasalDelivery.ScheduleEntry(startOffset: flat[$0], unitsPerHour: flat[$0 + 1])
+        }
+        return (defaults.object(forKey: isfKey) as? Double,
+                defaults.object(forKey: ratioKey) as? Double,
+                defaults.object(forKey: basalKey) as? Double,
+                schedule)
     }
 
     // MARK: - The file
@@ -266,14 +287,15 @@ final class StatsLiveReport: ObservableObject {
 
         isRefreshing = true
         lastError = nil
-        let defaults = UserDefaults.standard
-        let isf = defaults.object(forKey: Self.isfKey) as? Double
-        let ratio = defaults.object(forKey: Self.ratioKey) as? Double
-        let basal = defaults.object(forKey: Self.basalKey) as? Double
+        let remembered = Self.rememberedSettings()
+        let isf = remembered.currentISF
+        let ratio = remembered.currentCarbRatio
+        let basal = remembered.scheduledBasalPerDay
+        let schedule = remembered.basalSchedule
 
         Task { [weak self] in
             let outcome = await Self.write(to: url, currentISF: isf, currentCarbRatio: ratio,
-                                           scheduledBasalPerDay: basal)
+                                           scheduledBasalPerDay: basal, basalSchedule: schedule)
             guard let self else { return }
             self.isRefreshing = false
             switch outcome {
@@ -296,7 +318,8 @@ final class StatsLiveReport: ObservableObject {
     private nonisolated static func write(to url: URL,
                                           currentISF: Double?,
                                           currentCarbRatio: Double?,
-                                          scheduledBasalPerDay: Double?) async -> Outcome {
+                                          scheduledBasalPerDay: Double?,
+                                          basalSchedule: [BasalDelivery.ScheduleEntry]) async -> Outcome {
         let files = await withCheckedContinuation { continuation in
             HistoryLogStore.shared.loadFiles { continuation.resume(returning: $0) }
         }
@@ -316,7 +339,8 @@ final class StatsLiveReport: ObservableObject {
             }
             let insights = TherapyInsights.compute(from: lines,
                                                    currentISF: currentISF,
-                                                   currentCarbRatio: currentCarbRatio)
+                                                   currentCarbRatio: currentCarbRatio,
+                                                   basalSchedule: basalSchedule)
             let weekly = HistoryStatistics.periodSummary(from: lines, granularity: .week)
             let monthly = HistoryStatistics.periodSummary(from: lines, granularity: .month)
 
@@ -325,7 +349,8 @@ final class StatsLiveReport: ObservableObject {
             // file's entire promise is that it mirrors the screen.
             let models = HistoryStatisticsViewModel.Period.allCases.map { period -> (id: String, title: String, longTitle: String, model: StatsReportModel) in
                 let result = HistoryStatisticsViewModel.statistics(
-                    for: lines, days: period.days, scheduledBasalPerDay: scheduledBasalPerDay)
+                    for: lines, days: period.days, scheduledBasalPerDay: scheduledBasalPerDay,
+                    basalSchedule: basalSchedule)
                 let model = StatsReportModel.build(
                     stats: result.current,
                     insights: insights,

@@ -130,11 +130,24 @@ final class HistoryStatisticsViewModel: ObservableObject {
     let currentISF: Double?
     let currentCarbRatio: Double?
     let scheduledBasalPerDay: Double?
+    /// The programmed basal by time of day. The log does not record scheduled
+    /// basal, so every insulin total is rebuilt through this — see
+    /// `BasalDelivery`. Empty when unknown.
+    let basalSchedule: [BasalDelivery.ScheduleEntry]
 
-    init(currentISF: Double?, currentCarbRatio: Double?, scheduledBasalPerDay: Double?) {
-        self.currentISF = currentISF
-        self.currentCarbRatio = currentCarbRatio
-        self.scheduledBasalPerDay = scheduledBasalPerDay
+    /// ⚠️ ANYTHING NOT GIVEN FALLS BACK TO WHAT WAS LAST REMEMBERED. The screen
+    /// has two ways in: the toolbar, which passes the therapy settings, and
+    /// Settings → History Log, which passes nothing. On the second the
+    /// programmed-basal rows vanished, "your setting" read "—" and the carb
+    /// ratio tile contradicted itself. The settings are remembered each time
+    /// the toolbar way is used (`StatsLiveReport.rememberSettings`).
+    init(currentISF: Double?, currentCarbRatio: Double?, scheduledBasalPerDay: Double?,
+         basalSchedule: [BasalDelivery.ScheduleEntry] = []) {
+        let remembered = StatsLiveReport.rememberedSettings()
+        self.currentISF = currentISF ?? remembered.currentISF
+        self.currentCarbRatio = currentCarbRatio ?? remembered.currentCarbRatio
+        self.basalSchedule = basalSchedule.isEmpty ? remembered.basalSchedule : basalSchedule
+        self.scheduledBasalPerDay = scheduledBasalPerDay ?? remembered.scheduledBasalPerDay
     }
 
     func load() {
@@ -150,16 +163,19 @@ final class HistoryStatisticsViewModel: ObservableObject {
             let lines = HistoryLogReader.read(files: files.map(\.url))
             let isf = await self?.currentISF
             let ratio = await self?.currentCarbRatio
+            let schedule = await self?.basalSchedule ?? []
             // Fixed 00:00–07:00 night, no HealthKit involvement — see
             // `TherapyInsights.nightStartHour`.
             let computed = TherapyInsights.compute(from: lines,
                                                    currentISF: isf ?? nil,
-                                                   currentCarbRatio: ratio ?? nil)
+                                                   currentCarbRatio: ratio ?? nil,
+                                                   basalSchedule: schedule)
             // Both granularities up front, still off the main thread.
             let weekly = HistoryStatistics.periodSummary(from: lines, granularity: .week)
             let monthly = HistoryStatistics.periodSummary(from: lines, granularity: .month)
             let best = HistoryStatistics.bestTimeInRange(from: lines,
-                                                         windowDays: Period.allCases.compactMap(\.days))
+                                                         windowDays: Period.allCases.compactMap(\.days),
+                                                         now: Date())
             await MainActor.run {
                 self?.allLines = lines
                 self?.bestTimeInRange = best
@@ -195,10 +211,11 @@ final class HistoryStatisticsViewModel: ObservableObject {
         let lines = allLines
         let days = period.days
         let basal = scheduledBasalPerDay
+        let schedule = basalSchedule
         isRefreshing = true
 
         Task.detached(priority: .userInitiated) {
-            let result = Self.statistics(for: lines, days: days, scheduledBasalPerDay: basal)
+            let result = Self.statistics(for: lines, days: days, scheduledBasalPerDay: basal, basalSchedule: schedule)
             await MainActor.run { [weak self] in
                 guard let self, token == self.recomputeToken else { return }
                 self.stats = result.current
@@ -221,10 +238,13 @@ final class HistoryStatisticsViewModel: ObservableObject {
     nonisolated static func statistics(
         for lines: [HistoryLine],
         days: Int?,
-        scheduledBasalPerDay: Double?
+        scheduledBasalPerDay: Double?,
+        basalSchedule: [BasalDelivery.ScheduleEntry] = [],
+        now: Date = Date()
     ) -> (current: HistoryStatistics, previous: HistoryStatistics?, hasData: Bool) {
         guard let days else {
-            let all = HistoryStatistics.compute(from: lines, scheduledBasalPerDay: scheduledBasalPerDay)
+            let all = HistoryStatistics.compute(from: lines, scheduledBasalPerDay: scheduledBasalPerDay,
+                                                basalSchedule: basalSchedule)
             return (all, nil, !lines.isEmpty)
         }
 
@@ -234,12 +254,17 @@ final class HistoryStatisticsViewModel: ObservableObject {
         // the denominator, so each per-day average came out a little low. "30d"
         // now means the last 30 calendar days, today included.
         let calendar = Calendar.current
-        let now = Date()
         let startOfToday = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: -(days - 1), to: startOfToday)
             ?? now.addingTimeInterval(-Double(days) * 86400)
-        let previousStart = calendar.date(byAdding: .day, value: -days, to: start)
-            ?? start.addingTimeInterval(-Double(days) * 86400)
+        // ⚠️ THE COMPARISON WINDOW IS AS LONG AS THIS ONE HAS RUN, NOT N DAYS.
+        // Today is part of the period, so at a quarter past midnight "3 days" is
+        // two days and a quarter of an hour old. Comparing that against the
+        // three FULL days before it compared two different lengths of time, and
+        // the arrow read "12 points better" where the same length of time just
+        // before gave six.
+        let elapsed = max(0, now.timeIntervalSince(start))
+        let previousStart = start.addingTimeInterval(-elapsed)
 
         var current: [HistoryLine] = []
         var earlier: [HistoryLine] = []
@@ -251,15 +276,20 @@ final class HistoryStatisticsViewModel: ObservableObject {
             else if date >= previousStart { earlier.append(line) }
         }
 
-        let stats = HistoryStatistics.compute(from: current, scheduledBasalPerDay: scheduledBasalPerDay)
+        let stats = HistoryStatistics.compute(from: current, scheduledBasalPerDay: scheduledBasalPerDay,
+                                              basalSchedule: basalSchedule)
         // Only offer a comparison when the earlier window has enough readings to
-        // be a fair one — otherwise the arrow is just noise wearing a direction.
+        // be a fair one — otherwise the arrow is just noise wearing a direction:
+        // the same 70% of its possible readings the best-period card asks for.
         // Skipped entirely when there is obviously not enough, which halves the
         // work for the short periods.
         var previous: HistoryStatistics?
-        if earlier.count >= 100 {
-            let earlierStats = HistoryStatistics.compute(from: earlier, scheduledBasalPerDay: scheduledBasalPerDay)
-            previous = earlierStats.glucose.count >= 100 ? earlierStats : nil
+        let needed = max(100, Int(HistoryStatistics.bestTimeInRangeMinimumCoverage
+                                  * elapsed / HistoryStatistics.expectedReadingInterval))
+        if earlier.count >= needed {
+            let earlierStats = HistoryStatistics.compute(from: earlier, scheduledBasalPerDay: scheduledBasalPerDay,
+                                                         basalSchedule: basalSchedule)
+            previous = earlierStats.glucose.count >= needed ? earlierStats : nil
         }
         return (stats, previous, !current.isEmpty)
     }
@@ -299,13 +329,15 @@ final class HistoryStatisticsViewModel: ObservableObject {
     func fullReportModels() async -> [PeriodExport] {
         let lines = allLines
         let basal = scheduledBasalPerDay
+        let schedule = basalSchedule
         let insights = self.insights
         let weekly = weeklyComparison
         let monthly = monthlyComparison
 
         return await Task.detached(priority: .userInitiated) {
             Period.allCases.map { period in
-                let result = Self.statistics(for: lines, days: period.days, scheduledBasalPerDay: basal)
+                let result = Self.statistics(for: lines, days: period.days, scheduledBasalPerDay: basal,
+                                             basalSchedule: schedule)
                 let model = StatsReportModel.build(
                     stats: result.current,
                     insights: insights,
@@ -390,6 +422,9 @@ struct HistoryStatisticsView: View {
     /// The self-rewriting copy in iCloud Drive. Observed rather than read once,
     /// so the "last written" line updates as it works.
     @ObservedObject private var liveReport = StatsLiveReport.shared
+    /// Fires every five minutes — see its `.onReceive`. Shared, so that SwiftUI
+    /// making a new copy of this view does not start the five minutes again.
+    private static let reloadTimer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
 
     /// Set when a share is ready; presenting the sheet is the only thing that
     /// clears it.
@@ -463,12 +498,15 @@ struct HistoryStatisticsView: View {
     /// Read-only, and only so the review tiles can show them beside what the
     /// data suggests. Nil when the screen is opened without them.
     init(currentISF: Double? = nil, currentCarbRatio: Double? = nil,
-         scheduledBasalPerDay: Double? = nil, showsDoneButton: Bool = false) {
+         scheduledBasalPerDay: Double? = nil,
+         basalSchedule: [BasalDelivery.ScheduleEntry] = [],
+         showsDoneButton: Bool = false) {
         self.showsDoneButton = showsDoneButton
         self.exportSection = nil
         _viewModel = StateObject(wrappedValue: HistoryStatisticsViewModel(
             currentISF: currentISF, currentCarbRatio: currentCarbRatio,
-            scheduledBasalPerDay: scheduledBasalPerDay))
+            scheduledBasalPerDay: scheduledBasalPerDay,
+            basalSchedule: basalSchedule))
     }
 
     /// An off-screen copy of one chapter, for `ImageRenderer`.
@@ -540,7 +578,8 @@ struct HistoryStatisticsView: View {
     /// weaker statement, it is an unreadable one — 78% over a week and 78% over
     /// ninety days are different claims.
     private func exportScopeLine(_ section: StatsReportModel.SectionID) -> String {
-        section.ignoresPeriod
+        // "All" is all recorded history too: "Last all data" is not English.
+        section.ignoresPeriod || viewModel.period == .all
             ? NSLocalizedString("All recorded history", comment: "Export scope")
             : String(format: NSLocalizedString("Last %@", comment: "Export scope"), viewModel.period.longTitle)
     }
@@ -659,8 +698,18 @@ struct HistoryStatisticsView: View {
             // print "currently set to" in the settings review.
             StatsLiveReport.shared.rememberSettings(currentISF: viewModel.currentISF,
                                                     currentCarbRatio: viewModel.currentCarbRatio,
-                                                    scheduledBasalPerDay: viewModel.scheduledBasalPerDay)
+                                                    scheduledBasalPerDay: viewModel.scheduledBasalPerDay,
+                                                    basalSchedule: viewModel.basalSchedule)
             StatsLiveReport.shared.refresh()
+        }
+        // ⚠️ KEEP UP WITH THE SENSOR WHILE THE SCREEN IS OPEN. `load()` otherwise
+        // runs on appear and on returning to the app, so a screen left open
+        // showed the numbers of the moment it was opened: the period, and the
+        // best it is measured against, did not move as readings arrived. A
+        // reading arrives every five minutes; so does this.
+        .onReceive(Self.reloadTimer) { _ in
+            guard scenePhase == .active, viewModel.hasLoadedOnce, exportSection == nil else { return }
+            viewModel.load()
         }
         // Reload when the app comes back to the foreground. Without this the
         // pill and the whole keep-the-old-data path would be dead code: `load()`
@@ -1135,11 +1184,13 @@ struct HistoryStatisticsView: View {
     @ViewBuilder
     private var bestTimeInRangeTile: some View {
         if let best = viewModel.bestTimeInRangeForPeriod {
-            // Runs end on whole days and a tie goes to the most recent, so the best
-            // run ending today IS the period on screen.
-            let isCurrent = Calendar.current.isDateInToday(best.lastDay)
+            // The best is the highest the period on screen has stood at, at any
+            // moment, and a tie goes to the most recent: when nothing has beaten
+            // the period on screen, it IS the best.
+            let isCurrent = best.isCurrent
             let dates = Self.bestRangeFormatter.string(from: best.firstDay, to: best.lastDay)
-            // The period on screen scores higher but has too few readings to count.
+            // The period on screen scores higher but has too little sensor data
+            // (under 70% of the time it covers) to count.
             let tooLittleData = !isCurrent
                 && (viewModel.stats.glucose.inRange * 100).rounded() > (best.fraction * 100).rounded()
             VStack(alignment: .leading, spacing: 4) {
@@ -1187,7 +1238,7 @@ struct HistoryStatisticsView: View {
         let improving = change > 0
         return HStack(spacing: 3) {
             Image(systemName: improving ? "arrow.up.right" : "arrow.down.right")
-            Text(String(format: "%.0f pts", abs(change)))
+            Text(String(format: abs(change).rounded() == 1 ? "%.0f pt" : "%.0f pts", abs(change)))
         }
         .font(.caption.weight(.semibold))
         .monospacedDigit()
@@ -1196,8 +1247,8 @@ struct HistoryStatisticsView: View {
         .padding(.vertical, 5)
         .background(Capsule().fill(Color.loopControlTint))
         .accessibilityLabel(improving
-            ? Text(String(format: NSLocalizedString("Up %.0f points versus the previous period", comment: "TIR change up"), abs(change)))
-            : Text(String(format: NSLocalizedString("Down %.0f points versus the previous period", comment: "TIR change down"), abs(change))))
+            ? Text(String(format: NSLocalizedString("Up %.0f points versus the same length of time just before", comment: "TIR change up"), abs(change)))
+            : Text(String(format: NSLocalizedString("Down %.0f points versus the same length of time just before", comment: "TIR change down"), abs(change))))
     }
 
     /// Stacked proportional bar: five ordered segments, 2pt of surface between
@@ -1282,7 +1333,10 @@ struct HistoryStatisticsView: View {
                          NSLocalizedString("mg/dL", comment: "Unit"))
                 miniTile(NSLocalizedString("Est. A1c", comment: "Stat"),
                          String(format: "%.1f", viewModel.stats.glucose.gmi),
-                         "%")
+                         // The estimate (GMI) is meant for 14 days or more.
+                         viewModel.stats.daysWithData < 14
+                             ? NSLocalizedString("% · rough under 14 days", comment: "GMI on a short period")
+                             : "%")
                 miniTile(NSLocalizedString("Variability", comment: "Stat"),
                          String(format: "%.0f", viewModel.stats.glucose.coefficientOfVariation),
                          NSLocalizedString("% · goal <36", comment: "CV goal"))
@@ -1615,25 +1669,49 @@ struct HistoryStatisticsView: View {
             Text("How often the algorithm steps in, and how far it moves from your programmed basal. A well-tuned profile needs less correcting.", comment: "Loop activity explanation")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            statRow(NSLocalizedString("Automatic doses per day", comment: "Stat"),
-                    String(format: "%.1f", viewModel.stats.loopActivity.automaticDosesPerDay))
+            let activity = viewModel.stats.loopActivity
+            statRow(NSLocalizedString("Automatic boluses per day", comment: "Stat"),
+                    String(format: "%.1f", activity.automaticDosesPerDay))
             statRow(NSLocalizedString("Your own boluses per day", comment: "Stat"),
-                    String(format: "%.1f", viewModel.stats.loopActivity.manualBolusesPerDay))
-            statRow(NSLocalizedString("Basal delivered per day", comment: "Stat"),
-                    String(format: "%.1f U", viewModel.stats.loopActivity.deliveredBasalPerDay))
-            if let scheduled = viewModel.stats.loopActivity.scheduledBasalPerDay {
+                    String(format: "%.1f", activity.manualBolusesPerDay))
+            if activity.includesScheduledBasal {
+                statRow(NSLocalizedString("Basal delivered per day", comment: "Stat"),
+                        String(format: "%.1f U", activity.deliveredBasalPerDay))
+            } else {
+                // Without the schedule only the temp basals are known, and
+                // calling that "basal delivered" is how this row came to read
+                // 2.6 U beside a programmed 32.4.
+                statRow(NSLocalizedString("Temp basal delivered per day", comment: "Stat"),
+                        String(format: "%.1f U", activity.deliveredBasalPerDay))
+            }
+            if let scheduled = activity.scheduledBasalPerDay {
                 statRow(NSLocalizedString("Your programmed basal", comment: "Stat"),
                         String(format: "%.1f U", scheduled))
-                if let ratio = viewModel.stats.loopActivity.basalRatio {
-                    statRow(NSLocalizedString("Delivered vs programmed", comment: "Stat"),
+                if let ratio = activity.basalRatio {
+                    statRow(NSLocalizedString("Basal delivered vs programmed", comment: "Stat"),
                             String(format: "%.0f%%", ratio * 100))
                 }
+            }
+            statRow(NSLocalizedString("Loop's automatic boluses per day", comment: "Stat"),
+                    String(format: "%.1f U", activity.automaticBolusUnitsPerDay))
+            if let ratio = activity.loopRatio {
+                statRow(NSLocalizedString("Basal + automatic boluses vs programmed", comment: "Stat"),
+                        String(format: "%.0f%%", ratio * 100))
+            }
+            if activity.includesScheduledBasal {
+                Text("Loop can only hold basal back; what it adds, it gives as automatic boluses, so read the last row for whether it gives more or less than your profile. The pump does not report scheduled basal, so basal is rebuilt from your current basal schedule.", comment: "Loop activity basal caveat")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("The pump does not report scheduled basal, and this screen was opened without your basal schedule, so only temp basals are counted. Open Statistics from the main screen once to fix that.", comment: "Loop activity: no basal schedule")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
             if viewModel.stats.missedBolus.count > 0 {
                 Divider().opacity(0.4)
                 statRow(NSLocalizedString("Unexplained rises", comment: "Stat"),
                         "\(viewModel.stats.missedBolus.count)")
-                Text("Climbs of 60 mg/dL or more within 90 minutes with no carbs or bolus logged nearby — usually a meal that wasn't recorded.", comment: "Missed bolus explanation")
+                Text("Climbs of 60 mg/dL or more within 90 minutes with no carbs still absorbing and no bolus of your own nearby — often a meal that wasn't recorded.", comment: "Missed bolus explanation")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -1793,8 +1871,8 @@ struct HistoryStatisticsView: View {
                 // Honest empty state: say which floor was not met rather than
                 // showing a lone bar and calling it a comparison.
                 Text(comparisonGranularity == .week
-                     ? "Not enough history yet. A week needs at least 3 days with a full day's readings, and comparing needs 2 such weeks."
-                     : "Not enough history yet. A month needs at least 10 days with a full day's readings, and comparing needs 2 such months.",
+                     ? "Not enough history yet. A week needs at least 3 days with 6 hours or more of readings, and comparing needs 2 such weeks."
+                     : "Not enough history yet. A month needs at least 10 days with 6 hours or more of readings, and comparing needs 2 such months.",
                      comment: "Comparison tile empty state")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -2383,11 +2461,13 @@ struct HistoryStatisticsView: View {
                             (9.0, NSLocalizedString("moderate", comment: ""))],
                     aboveLabel: NSLocalizedString("high", comment: ""))
             if let adrr = viewModel.stats.risk.adrr {
-                riskRow(NSLocalizedString("Daily swing (ADRR)", comment: "Stat"),
-                        value: adrr,
-                        bands: [(20, NSLocalizedString("low", comment: "")),
-                                (40, NSLocalizedString("moderate", comment: ""))],
-                        aboveLabel: NSLocalizedString("high", comment: ""))
+                // ⚠️ NO CATEGORY ON PURPOSE. ADRR's published bands (under 20 low,
+                // over 40 high) were set for three to five finger-sticks a day.
+                // The daily extremes of 288 CGM readings are far wider by
+                // construction, so the same person reads "high" from a CGM and
+                // "low" from finger-sticks: 46 against 17 on one real log.
+                statRow(NSLocalizedString("Daily swing (ADRR, from CGM)", comment: "Stat"),
+                        String(format: "%.0f", adrr))
             }
             Text("Categories are the conventional published bands, not a judgement about you.", comment: "Risk bands caveat")
                 .font(.caption)
@@ -2473,11 +2553,16 @@ struct HistoryStatisticsView: View {
         tile {
             statRow(NSLocalizedString("Insulin per day", comment: "Stat"),
                     String(format: "%.1f U", viewModel.stats.insulin.dailyAverage))
-            statRow(NSLocalizedString("Given as bolus", comment: "Stat"),
-                    String(format: "%.0f%%", viewModel.stats.insulin.bolusShare * 100))
-            statRow(NSLocalizedString("Insulin Loop gave itself", comment: "Stat"),
-                    String(format: "%.0f%%", viewModel.stats.insulin.totalUnits > 0
-                           ? viewModel.stats.insulin.automaticUnits / viewModel.stats.insulin.totalUnits * 100 : 0))
+            // Three shares that add up to the whole. They used to be "given as
+            // bolus" and "Loop gave itself", which overlapped (and summed to 134%).
+            statRow(NSLocalizedString("Your own boluses", comment: "Stat"),
+                    String(format: "%.0f%%", viewModel.stats.insulin.manualBolusShare * 100))
+            statRow(NSLocalizedString("Loop's automatic boluses", comment: "Stat"),
+                    String(format: "%.0f%%", viewModel.stats.insulin.automaticBolusShare * 100))
+            statRow(viewModel.stats.insulin.includesScheduledBasal
+                        ? NSLocalizedString("Basal", comment: "Stat")
+                        : NSLocalizedString("Temp basal (scheduled basal not counted)", comment: "Stat"),
+                    String(format: "%.0f%%", viewModel.stats.insulin.basalShare * 100))
             statRow(NSLocalizedString("Carbs per day", comment: "Stat"),
                     String(format: "%.0f g", viewModel.stats.meals.dailyAverageGrams))
             statRow(NSLocalizedString("Meals per day", comment: "Stat"),
@@ -2502,6 +2587,12 @@ struct HistoryStatisticsView: View {
                         String(format: "%.0f h", viewModel.stats.pods.meanHours))
                 statRow(NSLocalizedString("Insulin discarded", comment: "Stat"),
                         String(format: "%.0f U", viewModel.stats.pods.wastedUnits))
+                if viewModel.stats.pods.overfullCount > 0 {
+                    // A pod cannot measure more than 50 U, so these are not in
+                    // the total above.
+                    statRow(NSLocalizedString("Pods stopped with over 50 U left", comment: "Stat"),
+                            "\(viewModel.stats.pods.overfullCount)")
+                }
             }
         }
     }
