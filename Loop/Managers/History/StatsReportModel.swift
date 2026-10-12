@@ -69,7 +69,15 @@ struct StatsReportModel {
         let value: String
         /// Second value, for the two-column night/day table.
         var secondValue: String?
-        var id: String { label + value + (secondValue ?? "") }
+        /// True for a heading over the rows that follow, saying what kind of
+        /// figure they are (a daily average, a share, a total for the period).
+        /// `label` is the heading and `value` its note, possibly empty.
+        var isGroup = false
+        var id: String { label + value + (secondValue ?? "") + (isGroup ? "#" : "") }
+
+        static func group(_ title: String, _ note: String = "") -> Row {
+            Row(label: title, value: note, isGroup: true)
+        }
     }
 
     /// A band of the time-in-range distribution.
@@ -504,24 +512,26 @@ extension StatsReportModel {
         var tiles: [Tile] = []
 
         var tile = Tile(title: NSLocalizedString("Lows", comment: "Tile title"))
-        tile.summary = String(format: NSLocalizedString("%d low events.", comment: "Low events summary"), stats.lowEvents.count)
+        let inTotal = NSLocalizedString("%d in total", comment: "A count over the whole period")
+        tile.summary = String(format: NSLocalizedString("%d low events in this period.", comment: "Low events summary"), stats.lowEvents.count)
         if stats.lowEvents.level2Count > 0 {
-            tile.rows.append(Row(label: NSLocalizedString("Serious (under 54)", comment: "Stat"), value: "\(stats.lowEvents.level2Count)"))
+            tile.rows.append(Row(label: NSLocalizedString("Of them serious (under 54)", comment: "Stat"), value: String(format: inTotal, stats.lowEvents.level2Count)))
         }
         if let duration = stats.lowEvents.averageDuration {
-            tile.rows.append(Row(label: NSLocalizedString("Typical length", comment: "Stat"), value: minutes(duration)))
+            tile.rows.append(Row(label: NSLocalizedString("Length of a low, on average", comment: "Stat"), value: minutes(duration)))
         }
         if stats.lowEvents.perWeek > 0 {
-            tile.rows.append(Row(label: NSLocalizedString("Per week", comment: "Stat"), value: String(format: "%.1f", stats.lowEvents.perWeek)))
+            tile.rows.append(Row(label: NSLocalizedString("Low events, on average", comment: "Stat"),
+                                 value: String(format: NSLocalizedString("%.1f per week", comment: "A count per week"), stats.lowEvents.perWeek)))
         }
         if stats.nights.total > 0 {
             tile.rows.append(Row(label: NSLocalizedString("Nights with a low", comment: "Stat"),
                                  value: String(format: NSLocalizedString("%1$d of %2$d", comment: "x of y"), stats.nights.withLow, stats.nights.total)))
         }
         if stats.highEvents.count > 0 {
-            tile.rows.append(Row(label: NSLocalizedString("Highs over 250", comment: "Stat"), value: "\(stats.highEvents.count)"))
+            tile.rows.append(Row(label: NSLocalizedString("Highs over 250", comment: "Stat"), value: String(format: inTotal, stats.highEvents.count)))
             if let duration = stats.highEvents.averageDuration {
-                tile.rows.append(Row(label: NSLocalizedString("Typical length of a high", comment: "Stat"), value: minutes(duration)))
+                tile.rows.append(Row(label: NSLocalizedString("Length of a high, on average", comment: "Stat"), value: minutes(duration)))
             }
         }
         tile.caveat = NSLocalizedString("Counted the way the CGM consensus defines an event: at least 15 minutes past the threshold to start one, and 15 minutes back to end it — so a single stray reading is not a low.", comment: "Event definition")
@@ -614,61 +624,81 @@ extension StatsReportModel {
 
         var activity = Tile(title: NSLocalizedString("How Hard Loop Is Working", comment: "Tile title"))
         activity.explanation = NSLocalizedString("How often the algorithm steps in, and how far it moves from the programmed basal.", comment: "Loop activity explanation")
-        // Same rows, labels and conditions as the screen's tile — see
+        // Same groups, rows, labels and conditions as the screen's tile — see
         // `HistoryStatisticsView.loopActivityTile`.
+        let perDay = NSLocalizedString("%.1f per day", comment: "A count per day")
+        let unitsPerDay = NSLocalizedString("%.1f U per day", comment: "Units per day")
+        let inTotal = NSLocalizedString("%d in total", comment: "A count over the whole period")
+        let dailyAverages = Row.group(NSLocalizedString("Daily averages", comment: "Row group: figures averaged per day"),
+                                      NSLocalizedString("The total for the period divided by its days. A day only partly covered counts as that part of a day.", comment: "Row group note: how a daily average is worked out"))
         activity.rows = [
-            Row(label: NSLocalizedString("Automatic boluses per day", comment: "Stat"), value: String(format: "%.1f", stats.loopActivity.automaticDosesPerDay)),
-            Row(label: NSLocalizedString("Your own boluses per day", comment: "Stat"), value: String(format: "%.1f", stats.loopActivity.manualBolusesPerDay)),
+            dailyAverages,
+            Row(label: NSLocalizedString("Automatic boluses given", comment: "Stat: how many, per day"), value: String(format: perDay, stats.loopActivity.automaticDosesPerDay)),
+            Row(label: NSLocalizedString("Your own boluses given", comment: "Stat: how many, per day"), value: String(format: perDay, stats.loopActivity.manualBolusesPerDay)),
             Row(label: stats.loopActivity.includesScheduledBasal
-                    ? NSLocalizedString("Basal delivered per day", comment: "Stat")
-                    : NSLocalizedString("Temp basal delivered per day", comment: "Stat"),
-                value: String(format: "%.1f U", stats.loopActivity.deliveredBasalPerDay))
+                    ? NSLocalizedString("Basal delivered", comment: "Stat")
+                    : NSLocalizedString("Temp basal delivered", comment: "Stat"),
+                value: String(format: unitsPerDay, stats.loopActivity.deliveredBasalPerDay))
         ]
         if let scheduled = stats.loopActivity.scheduledBasalPerDay {
-            activity.rows.append(Row(label: NSLocalizedString("Your programmed basal", comment: "Stat"), value: String(format: "%.1f U", scheduled)))
+            activity.rows.append(Row(label: NSLocalizedString("Basal programmed", comment: "Stat"), value: String(format: unitsPerDay, scheduled)))
+        }
+        activity.rows.append(Row(label: NSLocalizedString("Insulin in automatic boluses", comment: "Stat"),
+                                 value: String(format: unitsPerDay, stats.loopActivity.automaticBolusUnitsPerDay)))
+        if stats.loopActivity.basalRatio != nil || stats.loopActivity.loopRatio != nil {
+            activity.rows.append(.group(NSLocalizedString("Compared with programmed basal", comment: "Row group: percentages of programmed basal"),
+                                        NSLocalizedString("100% is exactly what your basal schedule would give over the period.", comment: "Row group note")))
             if let ratio = stats.loopActivity.basalRatio {
-                activity.rows.append(Row(label: NSLocalizedString("Basal delivered vs programmed", comment: "Stat"), value: String(format: "%.0f%%", ratio * 100)))
+                activity.rows.append(Row(label: NSLocalizedString("Basal delivered", comment: "Stat"), value: String(format: "%.0f%%", ratio * 100)))
+            }
+            if let ratio = stats.loopActivity.loopRatio {
+                activity.rows.append(Row(label: NSLocalizedString("Basal plus automatic boluses", comment: "Stat"), value: String(format: "%.0f%%", ratio * 100)))
             }
         }
-        activity.rows.append(Row(label: NSLocalizedString("Loop's automatic boluses per day", comment: "Stat"),
-                                 value: String(format: "%.1f U", stats.loopActivity.automaticBolusUnitsPerDay)))
-        if let ratio = stats.loopActivity.loopRatio {
-            activity.rows.append(Row(label: NSLocalizedString("Basal + automatic boluses vs programmed", comment: "Stat"), value: String(format: "%.0f%%", ratio * 100)))
-        }
         if stats.missedBolus.count > 0 {
-            activity.rows.append(Row(label: NSLocalizedString("Unexplained rises", comment: "Stat"), value: "\(stats.missedBolus.count)"))
+            activity.rows.append(.group(NSLocalizedString("Counted over the whole period", comment: "Row group: totals for the period")))
+            activity.rows.append(Row(label: NSLocalizedString("Unexplained rises", comment: "Stat"), value: String(format: inTotal, stats.missedBolus.count)))
             activity.caveat = NSLocalizedString("Climbs of 60 mg/dL or more within 90 minutes with no carbs still absorbing and no bolus of your own nearby — often a meal that wasn't recorded.", comment: "Missed bolus explanation")
         }
         tiles.append(activity)
 
         var supply = Tile(title: NSLocalizedString("Insulin, Carbs & Supplies", comment: "Tile title"))
         supply.rows = [
-            Row(label: NSLocalizedString("Insulin per day", comment: "Stat"), value: String(format: "%.1f U", stats.insulin.dailyAverage)),
+            dailyAverages,
+            Row(label: NSLocalizedString("Insulin, all of it", comment: "Stat"), value: String(format: unitsPerDay, stats.insulin.dailyAverage)),
+            Row(label: NSLocalizedString("Carbs", comment: "Stat"), value: String(format: NSLocalizedString("%.0f g per day", comment: "Grams per day"), stats.meals.dailyAverageGrams)),
+            Row(label: NSLocalizedString("Meals", comment: "Stat"), value: String(format: perDay, stats.mealsPerDay)),
+            .group(NSLocalizedString("Share of all insulin", comment: "Row group: shares of total insulin"),
+                   NSLocalizedString("Of all the insulin in the period. The three add up to 100%.", comment: "Row group note")),
             Row(label: NSLocalizedString("Your own boluses", comment: "Stat"), value: String(format: "%.0f%%", stats.insulin.manualBolusShare * 100)),
             Row(label: NSLocalizedString("Loop's automatic boluses", comment: "Stat"), value: String(format: "%.0f%%", stats.insulin.automaticBolusShare * 100)),
             Row(label: stats.insulin.includesScheduledBasal
                     ? NSLocalizedString("Basal", comment: "Stat")
                     : NSLocalizedString("Temp basal (scheduled basal not counted)", comment: "Stat"),
                 value: String(format: "%.0f%%", stats.insulin.basalShare * 100)),
-            Row(label: NSLocalizedString("Carbs per day", comment: "Stat"), value: String(format: "%.0f g", stats.meals.dailyAverageGrams)),
-            Row(label: NSLocalizedString("Meals per day", comment: "Stat"), value: String(format: "%.1f", stats.mealsPerDay)),
-            Row(label: NSLocalizedString("Carbs per meal", comment: "Stat"), value: String(format: "%.0f g", stats.gramsPerMeal))
+            .group(NSLocalizedString("Per meal", comment: "Row group: figures per meal")),
+            Row(label: NSLocalizedString("Carbs in a meal, on average", comment: "Stat"), value: String(format: "%.0f g", stats.gramsPerMeal))
         ]
         if let delay = stats.meals.medianLoggingDelay {
-            supply.rows.append(Row(label: NSLocalizedString("Typical logging delay", comment: "Stat"), value: minutes(delay)))
+            supply.rows.append(Row(label: NSLocalizedString("Logging delay, typical", comment: "Stat: the median"), value: minutes(delay)))
         }
         if stats.sensorGaps.count > 0 {
-            supply.rows.append(Row(label: NSLocalizedString("Sensor gaps", comment: "Stat"), value: "\(stats.sensorGaps.count)"))
+            supply.rows.append(.group(NSLocalizedString("Sensor, over the whole period", comment: "Row group: sensor totals")))
+            supply.rows.append(Row(label: NSLocalizedString("Gaps of 30 minutes or more", comment: "Stat"), value: String(format: inTotal, stats.sensorGaps.count)))
             if let longest = stats.sensorGaps.longest {
                 supply.rows.append(Row(label: NSLocalizedString("Longest gap", comment: "Stat"), value: minutes(longest)))
             }
         }
         if stats.pods.count > 0 {
-            supply.rows.append(Row(label: NSLocalizedString("Pod sessions", comment: "Stat"), value: "\(stats.pods.count)"))
-            supply.rows.append(Row(label: NSLocalizedString("Average pod life", comment: "Stat"), value: String(format: "%.0f h", stats.pods.meanHours)))
-            supply.rows.append(Row(label: NSLocalizedString("Insulin discarded", comment: "Stat"), value: String(format: "%.0f U", stats.pods.wastedUnits)))
+            supply.rows.append(.group(NSLocalizedString("Pods, over the whole period", comment: "Row group: pod totals")))
+            supply.rows.append(Row(label: NSLocalizedString("Pods that ended", comment: "Stat"), value: String(format: inTotal, stats.pods.count)))
+            supply.rows.append(Row(label: NSLocalizedString("Pod life, on average", comment: "Stat"), value: String(format: NSLocalizedString("%.0f h per pod", comment: "Hours per pod"), stats.pods.meanHours)))
+            supply.rows.append(Row(label: NSLocalizedString("Insulin discarded", comment: "Stat"), value: String(format: NSLocalizedString("%.0f U in total", comment: "Units over the whole period"), stats.pods.wastedUnits)))
+            if let perPod = stats.pods.wastedUnitsPerPod {
+                supply.rows.append(Row(label: NSLocalizedString("Insulin discarded, on average", comment: "Stat"), value: String(format: NSLocalizedString("%.0f U per pod", comment: "Units per pod"), perPod)))
+            }
             if stats.pods.overfullCount > 0 {
-                supply.rows.append(Row(label: NSLocalizedString("Pods stopped with over 50 U left", comment: "Stat"), value: "\(stats.pods.overfullCount)"))
+                supply.rows.append(Row(label: NSLocalizedString("Pods stopped with over 50 U left", comment: "Stat"), value: String(format: inTotal, stats.pods.overfullCount)))
             }
         }
         tiles.append(supply)

@@ -83,6 +83,11 @@ final class StatsLiveReport: ObservableObject {
     private nonisolated static let basalKey = "com.loopkit.Loop.statsLiveReportBasal"
     /// The basal schedule as a flat list: start offset, rate, start offset, rate…
     private nonisolated static let basalScheduleKey = "com.loopkit.Loop.statsLiveReportBasalSchedule"
+    /// Every basal schedule seen, oldest first, as (since, start, rate) triples;
+    /// `since` is seconds since 1970, or 0 for the first schedule ever seen.
+    private nonisolated static let basalScheduleHistoryKey = "com.loopkit.Loop.statsLiveReportBasalScheduleHistory"
+    /// Old schedules are only needed while the history they cover is on screen.
+    private nonisolated static let maximumScheduleVersions = 40
 
     /// Opt-in, like the history log itself. Nothing is written until the patient
     /// turns it on.
@@ -205,8 +210,61 @@ final class StatsLiveReport: ObservableObject {
         if let currentISF { defaults.set(currentISF, forKey: Self.isfKey) }
         if let currentCarbRatio { defaults.set(currentCarbRatio, forKey: Self.ratioKey) }
         if let scheduledBasalPerDay { defaults.set(scheduledBasalPerDay, forKey: Self.basalKey) }
-        if !basalSchedule.isEmpty {
-            defaults.set(basalSchedule.flatMap { [$0.startOffset, $0.unitsPerHour] }, forKey: Self.basalScheduleKey)
+        Self.rememberSchedule(basalSchedule)
+    }
+
+    /// Note the basal schedule in force now, and when it replaced the last one.
+    ///
+    /// ⚠️ THE LOG DOES NOT RECORD A SCHEDULE CHANGE, and scheduled basal is
+    /// rebuilt from the schedule (`BasalDelivery`). With only today's schedule,
+    /// changing it rewrote every past period's insulin totals. So each schedule
+    /// seen is kept with the moment it was first seen, and a period is rebuilt
+    /// with the schedule of its own time. "First seen" is when the statistics
+    /// screen was next opened from the main screen, which can be later than the
+    /// change itself.
+    nonisolated static func rememberSchedule(_ schedule: [BasalDelivery.ScheduleEntry], now: Date = Date()) {
+        // Only the newest schedule given is news; what came before is already here.
+        let current = BasalDelivery.current(of: schedule).map {
+            BasalDelivery.ScheduleEntry(startOffset: $0.startOffset, unitsPerHour: $0.unitsPerHour)
+        }
+        guard !current.isEmpty else { return }
+        let defaults = UserDefaults.standard
+        // Read before writing: with no history yet, `scheduleHistory` falls back
+        // to the single schedule stored under the key written just below.
+        var versions = BasalDelivery.versions(of: scheduleHistory())
+        defaults.set(current.flatMap { [$0.startOffset, $0.unitsPerHour] }, forKey: basalScheduleKey)
+        let latest = versions.last?.entries.map {
+            BasalDelivery.ScheduleEntry(startOffset: $0.startOffset, unitsPerHour: $0.unitsPerHour)
+        }
+        guard latest != current else { return }
+        // The first schedule ever seen stands for all the time before it.
+        let since: Date? = versions.isEmpty ? nil : now
+        versions.append((since: since ?? .distantPast, entries: current.map {
+            BasalDelivery.ScheduleEntry(startOffset: $0.startOffset, unitsPerHour: $0.unitsPerHour, since: since)
+        }))
+        var triples: [Double] = []
+        for version in versions.suffix(maximumScheduleVersions) {
+            for entry in version.entries {
+                triples += [entry.since?.timeIntervalSince1970 ?? 0, entry.startOffset, entry.unitsPerHour]
+            }
+        }
+        defaults.set(triples, forKey: basalScheduleHistoryKey)
+    }
+
+    /// Every basal schedule remembered, each entry carrying when its schedule
+    /// came into force. Falls back to the single schedule older builds stored.
+    nonisolated static func scheduleHistory() -> [BasalDelivery.ScheduleEntry] {
+        let defaults = UserDefaults.standard
+        let triples = defaults.array(forKey: basalScheduleHistoryKey) as? [Double] ?? []
+        if triples.count >= 3 {
+            return stride(from: 0, to: triples.count - 2, by: 3).map {
+                BasalDelivery.ScheduleEntry(startOffset: triples[$0 + 1], unitsPerHour: triples[$0 + 2],
+                                            since: triples[$0] > 0 ? Date(timeIntervalSince1970: triples[$0]) : nil)
+            }
+        }
+        let flat = defaults.array(forKey: basalScheduleKey) as? [Double] ?? []
+        return stride(from: 0, to: flat.count - 1, by: 2).map {
+            BasalDelivery.ScheduleEntry(startOffset: flat[$0], unitsPerHour: flat[$0 + 1])
         }
     }
 
@@ -215,14 +273,10 @@ final class StatsLiveReport: ObservableObject {
     nonisolated static func rememberedSettings()
     -> (currentISF: Double?, currentCarbRatio: Double?, scheduledBasalPerDay: Double?, basalSchedule: [BasalDelivery.ScheduleEntry]) {
         let defaults = UserDefaults.standard
-        let flat = defaults.array(forKey: basalScheduleKey) as? [Double] ?? []
-        let schedule = stride(from: 0, to: flat.count - 1, by: 2).map {
-            BasalDelivery.ScheduleEntry(startOffset: flat[$0], unitsPerHour: flat[$0 + 1])
-        }
         return (defaults.object(forKey: isfKey) as? Double,
                 defaults.object(forKey: ratioKey) as? Double,
                 defaults.object(forKey: basalKey) as? Double,
-                schedule)
+                scheduleHistory())
     }
 
     // MARK: - The file

@@ -143,10 +143,14 @@ final class HistoryStatisticsViewModel: ObservableObject {
     /// the toolbar way is used (`StatsLiveReport.rememberSettings`).
     init(currentISF: Double?, currentCarbRatio: Double?, scheduledBasalPerDay: Double?,
          basalSchedule: [BasalDelivery.ScheduleEntry] = []) {
+        // The schedule given is today's. What it replaced, and when, is only in
+        // what was remembered: note today's first, then use the whole history,
+        // so a past period is rebuilt with the schedule of its own time.
+        StatsLiveReport.rememberSchedule(basalSchedule)
         let remembered = StatsLiveReport.rememberedSettings()
         self.currentISF = currentISF ?? remembered.currentISF
         self.currentCarbRatio = currentCarbRatio ?? remembered.currentCarbRatio
-        self.basalSchedule = basalSchedule.isEmpty ? remembered.basalSchedule : basalSchedule
+        self.basalSchedule = remembered.basalSchedule.isEmpty ? basalSchedule : remembered.basalSchedule
         self.scheduledBasalPerDay = scheduledBasalPerDay ?? remembered.scheduledBasalPerDay
     }
 
@@ -1333,9 +1337,11 @@ struct HistoryStatisticsView: View {
                          NSLocalizedString("mg/dL", comment: "Unit"))
                 miniTile(NSLocalizedString("Est. A1c", comment: "Stat"),
                          String(format: "%.1f", viewModel.stats.glucose.gmi),
-                         // The estimate (GMI) is meant for 14 days or more.
+                         // The estimate (GMI) is meant for 14 days or more. Kept
+                         // this short: a longer caption wraps to a second line
+                         // and makes this tile taller than its two neighbours.
                          viewModel.stats.daysWithData < 14
-                             ? NSLocalizedString("% · rough under 14 days", comment: "GMI on a short period")
+                             ? NSLocalizedString("% · rough", comment: "GMI on a period under 14 days")
                              : "%")
                 miniTile(NSLocalizedString("Variability", comment: "Stat"),
                          String(format: "%.0f", viewModel.stats.glucose.coefficientOfVariation),
@@ -1670,36 +1676,42 @@ struct HistoryStatisticsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             let activity = viewModel.stats.loopActivity
-            statRow(NSLocalizedString("Automatic boluses per day", comment: "Stat"),
-                    String(format: "%.1f", activity.automaticDosesPerDay))
-            statRow(NSLocalizedString("Your own boluses per day", comment: "Stat"),
-                    String(format: "%.1f", activity.manualBolusesPerDay))
+            rowGroup(NSLocalizedString("Daily averages", comment: "Row group: figures averaged per day"),
+                     Self.dailyAverageNote)
+            statRow(NSLocalizedString("Automatic boluses given", comment: "Stat: how many, per day"),
+                    String(format: NSLocalizedString("%.1f per day", comment: "A count per day"), activity.automaticDosesPerDay))
+            statRow(NSLocalizedString("Your own boluses given", comment: "Stat: how many, per day"),
+                    String(format: NSLocalizedString("%.1f per day", comment: "A count per day"), activity.manualBolusesPerDay))
             if activity.includesScheduledBasal {
-                statRow(NSLocalizedString("Basal delivered per day", comment: "Stat"),
-                        String(format: "%.1f U", activity.deliveredBasalPerDay))
+                statRow(NSLocalizedString("Basal delivered", comment: "Stat"),
+                        String(format: NSLocalizedString("%.1f U per day", comment: "Units per day"), activity.deliveredBasalPerDay))
             } else {
                 // Without the schedule only the temp basals are known, and
                 // calling that "basal delivered" is how this row came to read
                 // 2.6 U beside a programmed 32.4.
-                statRow(NSLocalizedString("Temp basal delivered per day", comment: "Stat"),
-                        String(format: "%.1f U", activity.deliveredBasalPerDay))
+                statRow(NSLocalizedString("Temp basal delivered", comment: "Stat"),
+                        String(format: NSLocalizedString("%.1f U per day", comment: "Units per day"), activity.deliveredBasalPerDay))
             }
             if let scheduled = activity.scheduledBasalPerDay {
-                statRow(NSLocalizedString("Your programmed basal", comment: "Stat"),
-                        String(format: "%.1f U", scheduled))
+                statRow(NSLocalizedString("Basal programmed", comment: "Stat"),
+                        String(format: NSLocalizedString("%.1f U per day", comment: "Units per day"), scheduled))
+            }
+            statRow(NSLocalizedString("Insulin in automatic boluses", comment: "Stat"),
+                    String(format: NSLocalizedString("%.1f U per day", comment: "Units per day"), activity.automaticBolusUnitsPerDay))
+            if activity.basalRatio != nil || activity.loopRatio != nil {
+                rowGroup(NSLocalizedString("Compared with programmed basal", comment: "Row group: percentages of programmed basal"),
+                         NSLocalizedString("100% is exactly what your basal schedule would give over the period.", comment: "Row group note"))
                 if let ratio = activity.basalRatio {
-                    statRow(NSLocalizedString("Basal delivered vs programmed", comment: "Stat"),
+                    statRow(NSLocalizedString("Basal delivered", comment: "Stat"),
+                            String(format: "%.0f%%", ratio * 100))
+                }
+                if let ratio = activity.loopRatio {
+                    statRow(NSLocalizedString("Basal plus automatic boluses", comment: "Stat"),
                             String(format: "%.0f%%", ratio * 100))
                 }
             }
-            statRow(NSLocalizedString("Loop's automatic boluses per day", comment: "Stat"),
-                    String(format: "%.1f U", activity.automaticBolusUnitsPerDay))
-            if let ratio = activity.loopRatio {
-                statRow(NSLocalizedString("Basal + automatic boluses vs programmed", comment: "Stat"),
-                        String(format: "%.0f%%", ratio * 100))
-            }
             if activity.includesScheduledBasal {
-                Text("Loop can only hold basal back; what it adds, it gives as automatic boluses, so read the last row for whether it gives more or less than your profile. The pump does not report scheduled basal, so basal is rebuilt from your current basal schedule.", comment: "Loop activity basal caveat")
+                Text("Loop can only hold basal back; what it adds, it gives as automatic boluses, so read the last row for whether it gives more or less than your profile. The pump does not report scheduled basal, so basal is rebuilt from your basal schedule.", comment: "Loop activity basal caveat")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
@@ -1708,9 +1720,9 @@ struct HistoryStatisticsView: View {
                     .foregroundStyle(.tertiary)
             }
             if viewModel.stats.missedBolus.count > 0 {
-                Divider().opacity(0.4)
+                rowGroup(NSLocalizedString("Counted over the whole period", comment: "Row group: totals for the period"))
                 statRow(NSLocalizedString("Unexplained rises", comment: "Stat"),
-                        "\(viewModel.stats.missedBolus.count)")
+                        String(format: NSLocalizedString("%d in total", comment: "A count over the whole period"), viewModel.stats.missedBolus.count))
                 Text("Climbs of 60 mg/dL or more within 90 minutes with no carbs still absorbing and no bolus of your own nearby — often a meal that wasn't recorded.", comment: "Missed bolus explanation")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -2354,20 +2366,20 @@ struct HistoryStatisticsView: View {
                 Text("\(viewModel.stats.lowEvents.count)")
                     .font(.system(size: 34, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                Text(NSLocalizedString("low events", comment: "Low events label"))
+                Text(NSLocalizedString("low events in this period", comment: "Low events label"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             if viewModel.stats.lowEvents.level2Count > 0 {
-                statRow(NSLocalizedString("Serious (under 54)", comment: "Stat"),
-                        "\(viewModel.stats.lowEvents.level2Count)")
+                statRow(NSLocalizedString("Of them serious (under 54)", comment: "Stat"),
+                        String(format: NSLocalizedString("%d in total", comment: "A count over the whole period"), viewModel.stats.lowEvents.level2Count))
             }
             if let duration = viewModel.stats.lowEvents.averageDuration {
-                statRow(NSLocalizedString("Typical length", comment: "Stat"), Self.minutes(duration))
+                statRow(NSLocalizedString("Length of a low, on average", comment: "Stat"), Self.minutes(duration))
             }
             if viewModel.stats.lowEvents.perWeek > 0 {
-                statRow(NSLocalizedString("Per week", comment: "Stat"),
-                        String(format: "%.1f", viewModel.stats.lowEvents.perWeek))
+                statRow(NSLocalizedString("Low events, on average", comment: "Stat"),
+                        String(format: NSLocalizedString("%.1f per week", comment: "A count per week"), viewModel.stats.lowEvents.perWeek))
             }
             if viewModel.stats.nights.total > 0 {
                 statRow(NSLocalizedString("Nights with a low", comment: "Stat"),
@@ -2377,9 +2389,9 @@ struct HistoryStatisticsView: View {
             if viewModel.stats.highEvents.count > 0 {
                 Divider().opacity(0.4)
                 statRow(NSLocalizedString("Highs over 250", comment: "Stat"),
-                        "\(viewModel.stats.highEvents.count)")
+                        String(format: NSLocalizedString("%d in total", comment: "A count over the whole period"), viewModel.stats.highEvents.count))
                 if let duration = viewModel.stats.highEvents.averageDuration {
-                    statRow(NSLocalizedString("Typical length", comment: "Stat"), Self.minutes(duration))
+                    statRow(NSLocalizedString("Length of a high, on average", comment: "Stat"), Self.minutes(duration))
                 }
             }
             Text("Counted the way the CGM consensus defines an event: at least 15 minutes past the threshold to start one, and 15 minutes back to end it — so a single stray reading isn't a low.", comment: "Event definition explanation")
@@ -2551,10 +2563,20 @@ struct HistoryStatisticsView: View {
 
     private var supplyTile: some View {
         tile {
-            statRow(NSLocalizedString("Insulin per day", comment: "Stat"),
-                    String(format: "%.1f U", viewModel.stats.insulin.dailyAverage))
+            tileTitle(NSLocalizedString("Insulin, Carbs & Supplies", comment: "Tile title"))
+            rowGroup(NSLocalizedString("Daily averages", comment: "Row group: figures averaged per day"),
+                     Self.dailyAverageNote)
+            statRow(NSLocalizedString("Insulin, all of it", comment: "Stat"),
+                    String(format: NSLocalizedString("%.1f U per day", comment: "Units per day"), viewModel.stats.insulin.dailyAverage))
+            statRow(NSLocalizedString("Carbs", comment: "Stat"),
+                    String(format: NSLocalizedString("%.0f g per day", comment: "Grams per day"), viewModel.stats.meals.dailyAverageGrams))
+            statRow(NSLocalizedString("Meals", comment: "Stat"),
+                    String(format: NSLocalizedString("%.1f per day", comment: "A count per day"), viewModel.stats.mealsPerDay))
+
             // Three shares that add up to the whole. They used to be "given as
             // bolus" and "Loop gave itself", which overlapped (and summed to 134%).
+            rowGroup(NSLocalizedString("Share of all insulin", comment: "Row group: shares of total insulin"),
+                     NSLocalizedString("Of all the insulin in the period. The three add up to 100%.", comment: "Row group note"))
             statRow(NSLocalizedString("Your own boluses", comment: "Stat"),
                     String(format: "%.0f%%", viewModel.stats.insulin.manualBolusShare * 100))
             statRow(NSLocalizedString("Loop's automatic boluses", comment: "Stat"),
@@ -2563,38 +2585,67 @@ struct HistoryStatisticsView: View {
                         ? NSLocalizedString("Basal", comment: "Stat")
                         : NSLocalizedString("Temp basal (scheduled basal not counted)", comment: "Stat"),
                     String(format: "%.0f%%", viewModel.stats.insulin.basalShare * 100))
-            statRow(NSLocalizedString("Carbs per day", comment: "Stat"),
-                    String(format: "%.0f g", viewModel.stats.meals.dailyAverageGrams))
-            statRow(NSLocalizedString("Meals per day", comment: "Stat"),
-                    String(format: "%.1f", viewModel.stats.mealsPerDay))
-            statRow(NSLocalizedString("Carbs per meal", comment: "Stat"),
+
+            rowGroup(NSLocalizedString("Per meal", comment: "Row group: figures per meal"))
+            statRow(NSLocalizedString("Carbs in a meal, on average", comment: "Stat"),
                     String(format: "%.0f g", viewModel.stats.gramsPerMeal))
             if let delay = viewModel.stats.meals.medianLoggingDelay {
-                statRow(NSLocalizedString("Typical logging delay", comment: "Stat"), Self.minutes(delay))
+                statRow(NSLocalizedString("Logging delay, typical", comment: "Stat: the median"), Self.minutes(delay))
             }
             if viewModel.stats.sensorGaps.count > 0 {
-                Divider().opacity(0.4)
-                statRow(NSLocalizedString("Sensor gaps", comment: "Stat"),
-                        "\(viewModel.stats.sensorGaps.count)")
+                rowGroup(NSLocalizedString("Sensor, over the whole period", comment: "Row group: sensor totals"))
+                statRow(NSLocalizedString("Gaps of 30 minutes or more", comment: "Stat"),
+                        String(format: NSLocalizedString("%d in total", comment: "A count over the whole period"), viewModel.stats.sensorGaps.count))
                 if let longest = viewModel.stats.sensorGaps.longest {
                     statRow(NSLocalizedString("Longest gap", comment: "Stat"), Self.minutes(longest))
                 }
             }
             if viewModel.stats.pods.count > 0 {
-                Divider().opacity(0.4)
-                statRow(NSLocalizedString("Pod sessions", comment: "Stat"), "\(viewModel.stats.pods.count)")
-                statRow(NSLocalizedString("Average pod life", comment: "Stat"),
-                        String(format: "%.0f h", viewModel.stats.pods.meanHours))
+                let pods = viewModel.stats.pods
+                rowGroup(NSLocalizedString("Pods, over the whole period", comment: "Row group: pod totals"))
+                statRow(NSLocalizedString("Pods that ended", comment: "Stat"),
+                        String(format: NSLocalizedString("%d in total", comment: "A count over the whole period"), pods.count))
+                statRow(NSLocalizedString("Pod life, on average", comment: "Stat"),
+                        String(format: NSLocalizedString("%.0f h per pod", comment: "Hours per pod"), pods.meanHours))
                 statRow(NSLocalizedString("Insulin discarded", comment: "Stat"),
-                        String(format: "%.0f U", viewModel.stats.pods.wastedUnits))
-                if viewModel.stats.pods.overfullCount > 0 {
+                        String(format: NSLocalizedString("%.0f U in total", comment: "Units over the whole period"), pods.wastedUnits))
+                if let perPod = pods.wastedUnitsPerPod {
+                    statRow(NSLocalizedString("Insulin discarded, on average", comment: "Stat"),
+                            String(format: NSLocalizedString("%.0f U per pod", comment: "Units per pod"), perPod))
+                }
+                if pods.overfullCount > 0 {
                     // A pod cannot measure more than 50 U, so these are not in
-                    // the total above.
+                    // the discarded figures above.
                     statRow(NSLocalizedString("Pods stopped with over 50 U left", comment: "Stat"),
-                            "\(viewModel.stats.pods.overfullCount)")
+                            String(format: NSLocalizedString("%d in total", comment: "A count over the whole period"), pods.overfullCount))
                 }
             }
         }
+    }
+
+    /// What "per day" means on this screen, in one place so both tiles agree.
+    static let dailyAverageNote = NSLocalizedString(
+        "The total for the period divided by its days. A day only partly covered counts as that part of a day.",
+        comment: "Row group note: how a daily average is worked out")
+
+    /// A small heading inside a tile that says what KIND of figure the rows
+    /// under it are: a daily average, a share, or a total for the period. A
+    /// bare "20.0 U" beside "76.7 U" does not say which is which.
+    private func rowGroup(_ title: String, _ note: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+            if let note {
+                Text(note)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 6)
     }
 
     private func statRow(_ label: String, _ value: String) -> some View {

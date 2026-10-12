@@ -190,6 +190,12 @@ enum StatsHTMLReport {
             }
             html += "<tbody>"
             for row in tile.rows {
+                if row.isGroup {
+                    // A heading over the rows that follow: what kind of figure they are.
+                    let note = row.value.isEmpty ? "" : "<span>\(escape(row.value))</span>"
+                    html += "<tr class=\"group\"><th colspan=\"\(tile.columnHeadings == nil ? 2 : 3)\" scope=\"colgroup\">\(escape(row.label))\(note)</th></tr>"
+                    continue
+                }
                 html += "<tr><th scope=\"row\">\(escape(row.label))</th><td>\(escape(row.value))</td>"
                 if tile.columnHeadings != nil {
                     html += "<td class=\"secondary\">\(escape(row.secondValue ?? "—"))</td>"
@@ -596,6 +602,8 @@ enum StatsHTMLReport {
     table { width: 100%; border-collapse: collapse; margin-top: 10px; font-variant-numeric: tabular-nums; }
     th, td { text-align: right; padding: 7px 4px; border-bottom: 1px solid var(--line); font-size: 14.5px; }
     th[scope="row"], thead th:first-child { text-align: left; font-weight: 400; }
+    tr.group th { text-align: left; padding-top: 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); }
+    tr.group th span { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }
     thead th { color: var(--dim); font-size: 12px; font-weight: 600; }
     tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
     td.secondary { color: var(--dim); }

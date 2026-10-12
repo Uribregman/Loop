@@ -171,6 +171,13 @@ struct HistoryStatistics {
         /// Units left in pods when they stopped — insulin thrown away. Only the
         /// pods that reported an amount: see `overfullCount`.
         var wastedUnits: Double = 0
+        /// How many pods `wastedUnits` is the total of.
+        var measuredCount = 0
+        /// Units left in a pod when it stopped, on average over the pods that
+        /// reported an amount. Nil when none did.
+        var wastedUnitsPerPod: Double? {
+            measuredCount > 0 ? wastedUnits / Double(measuredCount) : nil
+        }
         /// Pods that stopped with MORE THAN 50 U left. A pod cannot measure its
         /// reservoir above 50 U and reports a fixed marker (51.15) instead, which
         /// used to be added to the discarded total as if it were an amount.
@@ -767,6 +774,7 @@ struct HistoryStatistics {
                         stats.pods.overfullCount += 1
                     } else {
                         stats.pods.wastedUnits += remaining
+                        stats.pods.measuredCount += 1
                     }
                 }
                 let reason = line.stopReason ?? "unknown"
@@ -882,8 +890,10 @@ struct HistoryStatistics {
         // time — over the days that count, so it has the same days as the
         // denominator it is divided by.
         stats.insulin.basalUnits = stats.insulin.tempBasalUnits
+        var programmedPerDay = basalSchedule.isEmpty ? scheduledBasalPerDay : BasalDelivery.dailyTotal(of: basalSchedule)
         if !basalSchedule.isEmpty, let earliest = activeFrom, let latest = activeTo {
             let delivery = BasalDelivery(lines: lines, schedule: basalSchedule, calendar: calendar)
+            programmedPerDay = delivery.programmedPerDay(from: earliest, to: latest)
             var scheduled = 0.0
             for day in countedDays {
                 let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
@@ -960,7 +970,7 @@ struct HistoryStatistics {
             manualBolusesPerDay: days > 0 ? Double(manualBoluses) / days : 0,
             deliveredBasalPerDay: days > 0 ? stats.insulin.basalUnits / days : 0,
             automaticBolusUnitsPerDay: days > 0 ? stats.insulin.automaticBolusUnits / days : 0,
-            scheduledBasalPerDay: basalSchedule.isEmpty ? scheduledBasalPerDay : BasalDelivery.dailyTotal(of: basalSchedule),
+            scheduledBasalPerDay: programmedPerDay,
             includesScheduledBasal: stats.insulin.includesScheduledBasal)
 
         // ⚠️ THE USER'S OWN BOLUSES ONLY. Loop gives an automatic bolus every few
@@ -1968,20 +1978,27 @@ extension HistoryStatistics {
 /// Checked against 21 pod sessions' own delivered totals (3,597 U): boluses plus
 /// this came to +0.1%; boluses plus temp basals alone, to -19.5%.
 ///
-/// The schedule is the one in force today. A schedule changed during the period
-/// makes the earlier part an estimate.
+/// A schedule is used from the moment it is known to have come into force
+/// (`ScheduleEntry.since`); the oldest one known also stands for all the time
+/// before it. The log does not record a schedule change, so "known" is when the
+/// statistics screen was next opened with the new schedule.
 struct BasalDelivery {
     /// The rate from `startOffset` seconds after local midnight until the next entry.
     struct ScheduleEntry: Equatable {
         let startOffset: TimeInterval
         let unitsPerHour: Double
+        /// When the schedule this entry belongs to came into force; nil for the
+        /// oldest schedule known. Entries with the same `since` are one schedule.
+        var since: Date? = nil
     }
 
     /// A pod reports its reservoir only up to this many units; above it, it
     /// reports a fixed marker instead of an amount.
     static let podReservoirReadingLimit = 50.0
 
-    private let schedule: [ScheduleEntry]
+    /// Every schedule that has been in force, oldest first, each from `since`
+    /// until the next one's.
+    private let versions: [(since: Date, entries: [ScheduleEntry])]
     private let calendar: Calendar
     /// Stretches the schedule was NOT running (a temp basal or a suspension),
     /// merged and in time order.
@@ -1991,7 +2008,7 @@ struct BasalDelivery {
 
     /// - Parameter lines: de-duplicated, in file order.
     init(lines: [HistoryLine], schedule: [ScheduleEntry], calendar: Calendar = .current) {
-        self.schedule = schedule.sorted { $0.startOffset < $1.startOffset }
+        self.versions = Self.versions(of: schedule)
         self.calendar = calendar
 
         var stretches: [(start: Date, end: Date)] = []
@@ -2055,8 +2072,41 @@ struct BasalDelivery {
         tempBasalUnits(from: start, to: end) + scheduledUnitsDelivered(from: start, to: end) - scheduledUnits(from: start, to: end)
     }
 
-    /// A day of the schedule, in units.
+    /// The schedules in `schedule`, oldest first. The oldest starts at the
+    /// beginning of time whatever its own `since`: there is nothing better to
+    /// use for the time before it.
+    static func versions(of schedule: [ScheduleEntry]) -> [(since: Date, entries: [ScheduleEntry])] {
+        var versions = Dictionary(grouping: schedule) { $0.since ?? .distantPast }
+            .map { (since: $0.key, entries: $0.value.sorted { $0.startOffset < $1.startOffset }) }
+            .sorted { $0.since < $1.since }
+        if !versions.isEmpty { versions[0].since = .distantPast }
+        return versions
+    }
+
+    /// The schedule in force now: the newest one in `schedule`.
+    static func current(of schedule: [ScheduleEntry]) -> [ScheduleEntry] {
+        versions(of: schedule).last?.entries ?? []
+    }
+
+    /// A day of the schedule in force now, in units.
     static func dailyTotal(of schedule: [ScheduleEntry]) -> Double {
+        dailyTotal(ofOne: current(of: schedule))
+    }
+
+    /// A day of the programmed basal averaged over `start` to `end`: a schedule
+    /// that changed part-way counts for the part of the time it was in force.
+    func programmedPerDay(from start: Date, to end: Date) -> Double {
+        guard end > start else { return Self.dailyTotal(ofOne: versions.last?.entries ?? []) }
+        var total = 0.0
+        for (index, version) in versions.enumerated() {
+            let versionEnd = index + 1 < versions.count ? versions[index + 1].since : Date.distantFuture
+            let inside = min(end, versionEnd).timeIntervalSince(max(start, version.since))
+            if inside > 0 { total += Self.dailyTotal(ofOne: version.entries) * inside }
+        }
+        return total / end.timeIntervalSince(start)
+    }
+
+    private static func dailyTotal(ofOne schedule: [ScheduleEntry]) -> Double {
         let sorted = schedule.sorted { $0.startOffset < $1.startOffset }
         var total = 0.0
         for (index, entry) in sorted.enumerated() {
@@ -2066,8 +2116,22 @@ struct BasalDelivery {
         return total
     }
 
-    /// What the schedule alone would deliver from `start` to `end`.
+    /// What the schedule alone would deliver from `start` to `end`, each
+    /// stretch at the schedule in force at the time.
     func scheduledUnits(from start: Date, to end: Date) -> Double {
+        guard end > start else { return 0 }
+        var total = 0.0
+        for (index, version) in versions.enumerated() {
+            let versionEnd = index + 1 < versions.count ? versions[index + 1].since : Date.distantFuture
+            let from = max(start, version.since)
+            let to = min(end, versionEnd)
+            if to > from { total += units(of: version.entries, from: from, to: to) }
+        }
+        return total
+    }
+
+    /// What one schedule would deliver from `start` to `end`.
+    private func units(of schedule: [ScheduleEntry], from start: Date, to end: Date) -> Double {
         guard !schedule.isEmpty, end > start else { return 0 }
         var total = 0.0
         var moment = start
