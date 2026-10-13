@@ -235,11 +235,21 @@ extension SupportManager: SupportUIDelegate {
         }
     }
 
+    /// This fork's own version, shown beside Loop's at the top of Settings, so
+    /// the build on the phone can be told apart from the one before it. Loop's
+    /// version only changes with an upstream update.
+    ///
+    /// ⚠️ BUMPED BY HAND WITH EVERY CHANGE TO THE APP. Right number for a small
+    /// change; middle for a big one (right back to 0); the left one only when
+    /// the owner says so, or after asking them.
+    static let forkVersion = "5.5.5"
+
     public var localizedAppNameAndVersion: String {
+        var text = Bundle.main.localizedNameAndVersion
         if let branch = branchNameIfNotReleaseBranch {
-            return Bundle.main.localizedNameAndVersion + " (\(branch))"
+            text += " (\(branch))"
         }
-        return Bundle.main.localizedNameAndVersion
+        return text + " · Claude v\(Self.forkVersion)"
     }
 
     public func generateIssueReport(completion: @escaping (String) -> Void) {
