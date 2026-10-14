@@ -996,10 +996,12 @@ struct HistoryStatisticsView: View {
         }
     }
 
-    /// Text inside a bar: white on the light-mode green, black on the brighter
-    /// dark-mode green. The owner's choice.
+    /// Text inside a bar: white on the light-mode green; in dark mode the
+    /// colour of the tile around the chart (#131313, see `LoopTileGlass`), so
+    /// it reads as a cut-out of the tile rather than pure black. The owner's
+    /// choice.
     private static let onBarText = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark ? .black : .white
+        traits.userInterfaceStyle == .dark ? UIColor(white: 19.0 / 255, alpha: 1) : .white
     })
 
     @ViewBuilder
