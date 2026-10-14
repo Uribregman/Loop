@@ -966,22 +966,25 @@ struct HistoryStatisticsView: View {
     /// annotation unconditional keeps the chart content one stable type, which
     /// matters on a screen that has already overflowed the device stack once by
     /// growing its generic types.
-    /// Above a week's bar: how many days it holds when that is under 7 (the
-    /// week still going, or one with the sensor off), so a short week is not
-    /// read as a whole one; and, when exporting, its number. One function, so
-    /// the chart's content stays one small type (see `exportBarLabel`).
-    private func weekBarLabel(_ point: HistoryStatistics.WeekPoint) -> some View {
-        VStack(spacing: 2) {
-            if point.days < 7 {
-                Text(String(format: NSLocalizedString("%d days", comment: "Days in a comparison period"), point.days))
-                    .font(.system(size: 10, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.loopControlTint))
-            }
-            exportBarLabel(Self.percent(point.inRange))
+    /// How many days a week holds, when that is under 7 (the week still going,
+    /// or one with the sensor off), so a short week is not read as a whole one.
+    ///
+    /// Written INSIDE the top of the bar, in the bar's own space: above it, the
+    /// label crowded the 100 line and was cut at the chart's edge. A bar too
+    /// short to hold it gets it above instead (see the annotation). `compact`
+    /// ("4d") is for the narrow bars of a long period.
+    @ViewBuilder
+    private func weekDaysLabel(_ point: HistoryStatistics.WeekPoint, compact: Bool) -> some View {
+        if point.days < 7 {
+            Text(String(format: compact
+                            ? NSLocalizedString("%dd", comment: "Days in a week, very short (e.g. 4d)")
+                            : NSLocalizedString("%d days", comment: "Days in a comparison period"),
+                        point.days))
+                .font(.caption2.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(point.inRange < 0.2 ? AnyShapeStyle(.secondary) : AnyShapeStyle(.white))
+                .lineLimit(1)
+                .fixedSize()
         }
     }
 
@@ -1805,11 +1808,14 @@ struct HistoryStatisticsView: View {
                 .opacity(selectedWeekStart == nil || selectedWeekStart == point.weekStart ? 1 : 0.35)
                 // ⚠️ THE NUMBER GOES ON THE BAR WHEN EXPORTING. On screen you
                 // tap a column to read it; a picture cannot be tapped, so an
-                // unlabelled export is a chart with its values removed. A week
-                // of under 7 days also says how many, always — see `weekBarLabel`.
-                .annotation(position: .top, alignment: .center, spacing: 2,
-                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                    weekBarLabel(point)
+                // unlabelled export is a chart with its values removed.
+                .annotation(position: .top, alignment: .center, spacing: 2) {
+                    exportBarLabel(Self.percent(point.inRange))
+                }
+                // A week of under 7 days says how many, inside the top of its
+                // own bar — see `weekDaysLabel`.
+                .annotation(position: point.inRange < 0.2 ? .top : .overlay, alignment: .top, spacing: 5) {
+                    weekDaysLabel(point, compact: viewModel.stats.weeklyTrend.count > 6)
                 }
                 // The 70% goal, drawn once as a recessive reference rather than
                 // repeated as a label on every bar.
