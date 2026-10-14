@@ -966,6 +966,25 @@ struct HistoryStatisticsView: View {
     /// annotation unconditional keeps the chart content one stable type, which
     /// matters on a screen that has already overflowed the device stack once by
     /// growing its generic types.
+    /// Above a week's bar: how many days it holds when that is under 7 (the
+    /// week still going, or one with the sensor off), so a short week is not
+    /// read as a whole one; and, when exporting, its number. One function, so
+    /// the chart's content stays one small type (see `exportBarLabel`).
+    private func weekBarLabel(_ point: HistoryStatistics.WeekPoint) -> some View {
+        VStack(spacing: 2) {
+            if point.days < 7 {
+                Text(String(format: NSLocalizedString("%d days", comment: "Days in a comparison period"), point.days))
+                    .font(.system(size: 10, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.loopControlTint))
+            }
+            exportBarLabel(Self.percent(point.inRange))
+        }
+    }
+
     @ViewBuilder
     private func exportBarLabel(_ text: String) -> some View {
         if isExporting {
@@ -1786,9 +1805,11 @@ struct HistoryStatisticsView: View {
                 .opacity(selectedWeekStart == nil || selectedWeekStart == point.weekStart ? 1 : 0.35)
                 // ⚠️ THE NUMBER GOES ON THE BAR WHEN EXPORTING. On screen you
                 // tap a column to read it; a picture cannot be tapped, so an
-                // unlabelled export is a chart with its values removed.
-                .annotation(position: .top, alignment: .center, spacing: 2) {
-                    exportBarLabel(Self.percent(point.inRange))
+                // unlabelled export is a chart with its values removed. A week
+                // of under 7 days also says how many, always — see `weekBarLabel`.
+                .annotation(position: .top, alignment: .center, spacing: 2,
+                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                    weekBarLabel(point)
                 }
                 // The 70% goal, drawn once as a recessive reference rather than
                 // repeated as a label on every bar.
