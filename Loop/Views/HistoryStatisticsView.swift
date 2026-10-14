@@ -90,6 +90,10 @@ final class HistoryStatisticsViewModel: ObservableObject {
     /// granularities are computed once at load so the picker is instant.
     @Published private(set) var weeklyComparison: [HistoryStatistics.PeriodPoint] = []
     @Published private(set) var monthlyComparison: [HistoryStatistics.PeriodPoint] = []
+    /// The calendar week the log begins in. It is short because logging began
+    /// part-way through it, and always will be, so Week By Week does not tag
+    /// it with its day count (the owner's choice).
+    @Published private(set) var firstLoggedWeek: Date?
     /// Best time in range ever, per period length in days, from EVERY line.
     @Published private(set) var bestTimeInRange: [Int: HistoryStatistics.BestTimeInRange] = [:]
 
@@ -174,6 +178,8 @@ final class HistoryStatisticsViewModel: ObservableObject {
                                                    currentISF: isf ?? nil,
                                                    currentCarbRatio: ratio ?? nil,
                                                    basalSchedule: schedule)
+            let firstReading = lines.lazy.filter { $0.t == "glucose" }.compactMap(\.parsedDate).min()
+            let firstWeek = firstReading.flatMap { Calendar.current.dateInterval(of: .weekOfYear, for: $0)?.start }
             // Both granularities up front, still off the main thread.
             let weekly = HistoryStatistics.periodSummary(from: lines, granularity: .week)
             let monthly = HistoryStatistics.periodSummary(from: lines, granularity: .month)
@@ -186,6 +192,7 @@ final class HistoryStatisticsViewModel: ObservableObject {
                 self?.insights = computed
                 self?.weeklyComparison = weekly
                 self?.monthlyComparison = monthly
+                self?.firstLoggedWeek = firstWeek
                 // `recompute()` owns `isLoading`/`isRefreshing`/`hasLoadedOnce`
                 // now: it finishes AFTER this block, and clearing them here
                 // would drop the loading tile before there were any numbers to
@@ -968,6 +975,7 @@ struct HistoryStatisticsView: View {
     /// growing its generic types.
     /// How many days a week holds, when that is under 7 (the week still going,
     /// or one with the sensor off), so a short week is not read as a whole one.
+    /// Not on the week the log begins in: it is short for good.
     ///
     /// Written INSIDE the top of the bar, in the bar's own space: above it, the
     /// label crowded the 100 line and was cut at the chart's edge. A bar too
@@ -975,7 +983,7 @@ struct HistoryStatisticsView: View {
     /// ("4d") is for the narrow bars of a long period.
     @ViewBuilder
     private func weekDaysLabel(_ point: HistoryStatistics.WeekPoint, compact: Bool) -> some View {
-        if point.days < 7 {
+        if point.days < 7, point.weekStart != viewModel.firstLoggedWeek {
             Text(String(format: compact
                             ? NSLocalizedString("%dd", comment: "Days in a week, very short (e.g. 4d)")
                             : NSLocalizedString("%d days", comment: "Days in a comparison period"),
