@@ -982,11 +982,17 @@ struct HistoryStatisticsView: View {
                         point.days))
                 .font(.caption2.weight(.semibold))
                 .monospacedDigit()
-                .foregroundStyle(point.inRange < 0.2 ? AnyShapeStyle(.secondary) : AnyShapeStyle(.white))
+                .foregroundStyle(point.inRange < 0.2 ? AnyShapeStyle(.secondary) : AnyShapeStyle(Self.onBarText))
                 .lineLimit(1)
                 .fixedSize()
         }
     }
+
+    /// Text inside a bar: white on the light-mode green, black on the brighter
+    /// dark-mode green. The owner's choice.
+    private static let onBarText = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .black : .white
+    })
 
     @ViewBuilder
     private func exportBarLabel(_ text: String) -> some View {

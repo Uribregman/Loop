@@ -242,7 +242,7 @@ extension SupportManager: SupportUIDelegate {
     /// ⚠️ BUMPED BY HAND WITH EVERY CHANGE TO THE APP. Right number for a small
     /// change; middle for a big one (right back to 0); the left one only when
     /// the owner says so, or after asking them.
-    static let forkVersion = "5.5.8"
+    static let forkVersion = "5.5.9"
 
     public var localizedAppNameAndVersion: String {
         var text = Bundle.main.localizedNameAndVersion
