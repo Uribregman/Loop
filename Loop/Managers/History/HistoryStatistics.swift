@@ -1562,6 +1562,26 @@ struct HistoryStatistics {
     }
 
     /// Time in range for each calendar week that has at least three usable days.
+    /// Week By Week for a period that starts at `start`: whole calendar weeks,
+    /// from the one holding `start` to the latest.
+    ///
+    /// ⚠️ WHOLE WEEKS, NOT THE PART OF A WEEK INSIDE THE PERIOD. The tile used
+    /// the period's own readings, so its first week was cut at the period's
+    /// start: in the 7-day view "4–10 Oct" was really 8–10 Oct and read 86%,
+    /// while the 14-day view, and Compare Periods, gave the same week 78%. A
+    /// week now has one number wherever it appears. The week still going
+    /// counts the days so far.
+    static func wholeWeeks(from rawLines: [HistoryLine], overlapping start: Date,
+                           calendar: Calendar = .current) -> [WeekPoint] {
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: start)?.start ?? start
+        let recent = rawLines.filter { $0.t == "glucose" && ($0.date.map { $0 >= weekStart } ?? false) }
+        let glucose = HistoryLineDeduplicator.deduplicated(recent).compactMap { line -> (date: Date, value: Double)? in
+            guard let date = line.date, let mgdl = line.mgdl else { return nil }
+            return (date, mgdl)
+        }
+        return weeklySummary(glucose, calendar: calendar)
+    }
+
     private static func weeklySummary(_ glucose: [(date: Date, value: Double)],
                                       calendar: Calendar) -> [WeekPoint] {
         guard !glucose.isEmpty else { return [] }

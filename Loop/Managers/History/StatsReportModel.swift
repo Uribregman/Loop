@@ -276,13 +276,15 @@ extension StatsReportModel {
 
         if stats.weeklyTrend.count >= 2 {
             var tile = Tile(title: NSLocalizedString("Week By Week", comment: "Tile title"))
-            tile.explanation = NSLocalizedString("Time in range for each week. A single number tells you where you are; this tells you which way you are going.", comment: "Weekly trend explanation")
+            tile.explanation = NSLocalizedString("Time in range for each week. A single number tells you where you are; this tells you which way you are going. Whole calendar weeks, so the first can begin before the period does; this week counts the days so far.", comment: "Weekly trend explanation")
             tile.chart = .columns(ColumnChart(
                 columns: stats.weeklyTrend.map {
                     Column(label: weekFormatter.string(from: $0.weekStart),
                            value: $0.inRange * 100,
                            display: percent($0.inRange),
-                           detail: String(format: NSLocalizedString("%d days", comment: "Day count"), $0.days))
+                           detail: Calendar.current.dateInterval(of: .weekOfYear, for: Date())?.start == $0.weekStart
+                               ? String(format: NSLocalizedString("so far, %d days", comment: "Days so far in the week still going"), $0.days)
+                               : String(format: NSLocalizedString("%d days", comment: "Day count"), $0.days))
                 },
                 maximum: 100, goal: 70,
                 lightHex: "#2FA84F", darkHex: "#34C759", axisSuffix: "%"))

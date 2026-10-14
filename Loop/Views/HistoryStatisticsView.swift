@@ -280,8 +280,11 @@ final class HistoryStatisticsViewModel: ObservableObject {
             else if date >= previousStart { earlier.append(line) }
         }
 
-        let stats = HistoryStatistics.compute(from: current, scheduledBasalPerDay: scheduledBasalPerDay,
+        var stats = HistoryStatistics.compute(from: current, scheduledBasalPerDay: scheduledBasalPerDay,
                                               basalSchedule: basalSchedule)
+        // Whole weeks, so a week has the same number in every period — see
+        // `HistoryStatistics.wholeWeeks`.
+        stats.weeklyTrend = HistoryStatistics.wholeWeeks(from: lines, overlapping: start, calendar: calendar)
         // Only offer a comparison when the earlier window has enough readings to
         // be a fair one — otherwise the arrow is just noise wearing a direction:
         // the same 70% of its possible readings the best-period card asks for.
@@ -359,9 +362,13 @@ final class HistoryStatisticsViewModel: ObservableObject {
     }
 
     /// Percentage-point change in time in range against the previous window.
+    ///
+    /// From the two percentages as shown, so it is the difference a reader gets
+    /// by subtracting them: 78% against 80% is 2 points, where the unrounded
+    /// fractions (77.8 and 80.3) gave 3.
     var timeInRangeChange: Double? {
         guard let previous, previous.glucose.count > 0, stats.glucose.count > 0 else { return nil }
-        return (stats.glucose.inRange - previous.glucose.inRange) * 100
+        return (stats.glucose.inRange * 100).rounded() - (previous.glucose.inRange * 100).rounded()
     }
 }
 
@@ -1154,6 +1161,19 @@ struct HistoryStatisticsView: View {
                 Spacer()
             }
 
+            // ⚠️ SAY WHAT THE ARROW IS AGAINST. Each period is compared with the
+            // same length of time just before it, so 7 days can be "up 18" while
+            // 14 days is "down 3" on the same morning. Without the other figure
+            // and its dates the two arrows look like a contradiction.
+            if let previous = viewModel.previous, let change = viewModel.timeInRangeChange, abs(change) >= 1,
+               let first = previous.firstDate, let last = previous.lastDate {
+                Text(String(format: NSLocalizedString("Against %1$@ for %2$@, the same length of time just before.", comment: "TIR change: what it is compared with (1: percent, 2: dates)"),
+                            Self.percent(previous.glucose.inRange),
+                            Self.bestRangeFormatter.string(from: first, to: last)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             timeInRangeBar
 
             // The consensus target, stated so the number above has a meaning
@@ -1216,6 +1236,13 @@ struct HistoryStatisticsView: View {
                     } else if tooLittleData {
                         Text(String(format: NSLocalizedString("%1$@ · this period needs %2$@ sensor data to count", comment: "Best TIR card: dates, and why the higher period on screen does not count (2: e.g. 70%)"),
                                     dates, Self.percent(HistoryStatistics.bestTimeInRangeMinimumCoverage)))
+                    } else if Calendar.current.isDateInToday(best.achievedAt),
+                              Calendar.current.isDateInToday(best.lastDay) {
+                        // The same days as the period on screen, a little higher
+                        // a few hours ago. Without this it reads as a different
+                        // period that happens to have the same dates.
+                        Text(String(format: NSLocalizedString("%1$@ · reached earlier today, at %2$@", comment: "Best TIR card: the period on screen stood higher earlier today (2: time)"),
+                                    dates, DateFormatter.localizedString(from: best.achievedAt, dateStyle: .none, timeStyle: .short)))
                     } else {
                         Text(dates)
                     }
@@ -1735,13 +1762,16 @@ struct HistoryStatisticsView: View {
     private var weeklyTrendTile: some View {
         collapsibleTile("weeklyTrend", title: NSLocalizedString("Week By Week", comment: "Tile title")) {
             if let latest = viewModel.stats.weeklyTrend.last {
-                peekLine(String(format: NSLocalizedString("Latest week %@ in range.", comment: "Weekly trend peek"),
-                                Self.percent(latest.inRange)))
+                peekLine(Self.isThisWeek(latest.weekStart)
+                    ? String(format: NSLocalizedString("This week so far %@ in range.", comment: "Weekly trend peek, week still going"),
+                             Self.percent(latest.inRange))
+                    : String(format: NSLocalizedString("Latest week %@ in range.", comment: "Weekly trend peek"),
+                             Self.percent(latest.inRange)))
             } else {
                 peekLine(NSLocalizedString("Time in range week by week.", comment: "Weekly trend peek"))
             }
         } content: {
-            Text("Time in range for each week. A single number tells you where you are; this tells you which way you're going.", comment: "Weekly trend explanation")
+            Text("Time in range for each week. A single number tells you where you are; this tells you which way you're going. Whole calendar weeks, so the first can begin before the period does; this week counts the days so far.", comment: "Weekly trend explanation")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             weeklyTrendSelectionReadout
@@ -1829,7 +1859,9 @@ struct HistoryStatisticsView: View {
                 Text(Self.percent(point.inRange))
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
-                Text(String(format: NSLocalizedString("%d days", comment: "Days in a comparison period"), point.days))
+                Text(Self.isThisWeek(start)
+                        ? String(format: NSLocalizedString("so far, %d days", comment: "Days so far in the week still going"), point.days)
+                        : String(format: NSLocalizedString("%d days", comment: "Days in a comparison period"), point.days))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1863,14 +1895,21 @@ struct HistoryStatisticsView: View {
                                ignoresPeriod: true) {
             if let latest = points.last, points.count >= 2 {
                 let previous = points[points.count - 2]
-                let change = comparisonMetric.value(latest) - comparisonMetric.value(previous)
-                let rounded = change.rounded()
+                // From the two values as shown, so the difference is the one a
+                // reader gets by subtracting them (87% against 78% is 9, not 10).
+                let rounded = comparisonMetric.value(latest).rounded() - comparisonMetric.value(previous).rounded()
                 let direction = rounded == 0
                     ? NSLocalizedString("level with", comment: "Comparison peek, no change")
                     : (rounded > 0
                        ? String(format: NSLocalizedString("up %.0f from", comment: "Comparison peek, increase"), rounded)
                        : String(format: NSLocalizedString("down %.0f from", comment: "Comparison peek, decrease"), abs(rounded)))
-                peekLine(String(format: NSLocalizedString("Latest %1$@ — %2$@ the period before.", comment: "Comparison peek"),
+                // The newest week or month is usually still going; say so, so it
+                // is not read as a whole one.
+                let stillGoing = Calendar.current.dateInterval(of: comparisonGranularity == .week ? .weekOfYear : .month,
+                                                               for: Date())?.start == latest.start
+                peekLine(String(format: stillGoing
+                                    ? NSLocalizedString("So far %1$@ — %2$@ the period before.", comment: "Comparison peek, newest period still going")
+                                    : NSLocalizedString("Latest %1$@ — %2$@ the period before.", comment: "Comparison peek"),
                                 comparisonMetric.formatted(latest), direction))
             } else {
                 peekLine(NSLocalizedString("Week by week, or month by month.", comment: "Comparison peek"))
@@ -2123,6 +2162,11 @@ struct HistoryStatisticsView: View {
     ///
     /// Shared by the comparison rows and the Week By Week readout so the same
     /// week is never labelled two different ways on one screen.
+    /// True for the calendar week that holds today.
+    static func isThisWeek(_ weekStart: Date) -> Bool {
+        Calendar.current.dateInterval(of: .weekOfYear, for: Date())?.start == weekStart
+    }
+
     static func weekRangeLabel(_ start: Date) -> String {
         let calendar = Calendar.current
         guard let interval = calendar.dateInterval(of: .weekOfYear, for: start) else {
