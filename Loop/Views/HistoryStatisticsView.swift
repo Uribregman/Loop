@@ -804,7 +804,10 @@ struct HistoryStatisticsView: View {
         else { return AnyView(EmptyView()) }
         return AnyView(VStack(spacing: 16) {
             sectionHeader(NSLocalizedString("When", comment: "Section header"), share: .when)
-            if viewModel.stats.hourlyProfile.count >= 6 { hourlyTile }
+            // Not on 3 days: each hour then has at most three days behind it,
+            // too few for a typical value and a spread between days to mean
+            // anything. The owner asked for it gone from that view.
+            if viewModel.stats.hourlyProfile.count >= 6 && viewModel.period != .threeDays { hourlyTile }
             if viewModel.stats.weekdayProfile.count >= 4 { weekdayTile }
             dayNightTile
         })

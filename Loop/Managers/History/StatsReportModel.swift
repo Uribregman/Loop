@@ -184,7 +184,8 @@ extension StatsReportModel {
         sections.append(Section(id: .overview, tiles: overviewTiles(stats, observations: observations)))
         let progress = progressTiles(stats, weekly: weeklyComparison, monthly: monthlyComparison)
         if !progress.isEmpty { sections.append(Section(id: .progress, tiles: progress)) }
-        let when = whenTiles(stats)
+        // Same rule as the screen: no Through The Day on 3 days.
+        let when = whenTiles(stats, showsHourly: periodTitle != HistoryStatisticsViewModel.Period.threeDays.title)
         if !when.isEmpty { sections.append(Section(id: .when, tiles: when)) }
         let meals = mealTiles(stats)
         if !meals.isEmpty { sections.append(Section(id: .meals, tiles: meals)) }
@@ -398,10 +399,10 @@ extension StatsReportModel {
 
     // MARK: When
 
-    private static func whenTiles(_ stats: HistoryStatistics) -> [Tile] {
+    private static func whenTiles(_ stats: HistoryStatistics, showsHourly: Bool) -> [Tile] {
         var tiles: [Tile] = []
 
-        if stats.hourlyProfile.count >= 6 {
+        if showsHourly && stats.hourlyProfile.count >= 6 {
             var tile = Tile(title: NSLocalizedString("Through The Day", comment: "Tile title"))
             if let worst = stats.worstHour {
                 tile.summary = String(format: NSLocalizedString("Highest around %1$@, typically %2$.0f mg/dL.", comment: "Hourly summary"),
