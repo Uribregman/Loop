@@ -527,7 +527,10 @@ final class FollowerPublisher: ObservableObject {
         }
         // The newest one or two monthly files can hold a 24-hour window.
         let urls = Array(files.prefix(2)).map(\.url)
-        let lines = HistoryLogReader.read(files: urls)
+        // De-duplicated first: a record named by a DELETED NOTE must not reach
+        // the follower (the note itself is skipped below, like any other type
+        // this does not forward), and a re-reported record goes once.
+        let lines = HistoryLineDeduplicator.deduplicated(HistoryLogReader.read(files: urls))
         let cutoff = Date().addingTimeInterval(-window)
 
         var records: [[String: Any]] = []

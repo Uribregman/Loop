@@ -123,7 +123,15 @@ enum HistoryLogReader {
         autoreleasepool {
             guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return }
             for line in data.split(separator: 0x0A) where !line.isEmpty {
-                if var decoded = try? decoder.decode(HistoryLine.self, from: Data(line)) {
+                // ⚠️ STATUS RECORDS ARE SKIPPED BEFORE THEY ARE PARSED. One is
+                // written every loop cycle for Loop Follow's live screen, with
+                // its predicted-glucose and insulin timelines, and together they
+                // are 90% of the file (82 of 92 MB on 60 days). Nothing that
+                // reads through here uses them: the statistics never did, and the
+                // follower share fetches the newest status on its own. Parsing
+                // them was most of the time and memory every open took.
+                if Self.isStatusLine(line) { continue }
+                if var decoded = try? decoder.decode(HistoryLine.self, from: Data(line)), decoded.t != "status" {
                     // Parse the timestamp once, here, for every later pass.
                     decoded.parsedDate = HistoryTimestamp.formatter.date(from: decoded.at)
                     parsed.append(decoded)
@@ -135,6 +143,15 @@ enum HistoryLogReader {
                             cost: parsed.count * MemoryLayout<HistoryLine>.stride)
         }
         return parsed
+    }
+
+    private static let statusMarker = Data(#""t":"status""#.utf8)
+
+    /// The log is written with sorted keys, so a status record ENDS with
+    /// `"t":"status","v":1}`: a look at the last few bytes is enough. A line
+    /// written some other way is simply decoded and dropped afterwards.
+    private static func isStatusLine(_ line: Data) -> Bool {
+        line.suffix(32).firstRange(of: statusMarker) != nil
     }
 }
 
