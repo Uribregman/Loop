@@ -44,6 +44,9 @@ struct HistoryLine: Decodable {
     /// was replaced early this is the shortened end, in the last record of it.
     let endedAt: String?
 
+    // deleted note: the type of the record it removes (see `DeletedHistoryRecord`)
+    let of: String?
+
     // pod
     let activatedAt: String?
     let hoursRun: Double?
@@ -157,6 +160,11 @@ enum HistoryLineDeduplicator {
     ///
     /// Last, not first: a re-reported dose is the reconciled one (delivered
     /// units filled in), and an edited meal record is the corrected one.
+    ///
+    /// A DELETED NOTE shares the key of the record it deletes, so when it comes
+    /// last the record is dropped and only the note (`t == "deleted"`, which no
+    /// statistic reads) remains. A record re-added after the note comes back.
+    /// ⚠️ So filter by type AFTER this, or keep "deleted" lines in the filter.
     static func deduplicated(_ lines: [HistoryLine]) -> [HistoryLine] {
         var lastIndexForKey: [String: Int] = [:]
         var keyForIndex: [Int: String] = [:]
@@ -207,8 +215,87 @@ extension HistoryLine {
         case "meal":
             guard let syncIdentifier, !syncIdentifier.isEmpty else { return nil }
             return "meal|\(syncIdentifier)"
+        case "deleted":
+            guard let of, let syncIdentifier, !syncIdentifier.isEmpty else { return nil }
+            return "\(of)|\(syncIdentifier)"
         default:
             return nil
+        }
+    }
+}
+
+// MARK: - Import
+
+/// Works out which records of an imported history file the log is missing.
+///
+/// ⚠️ ADD-ONLY. An import never changes or removes anything already in the log:
+/// a record the log already has (the same identity the de-duplicator uses) is
+/// skipped, and each record it lacks is appended, carrying the ADDED NOTE
+/// (`addedAt`, `addedVia: "import"`). Not imported: status records (they only
+/// feed Loop Follow's live screen), anything dated in the future, and lines that
+/// do not read as a record.
+enum HistoryImporter {
+    struct Plan {
+        /// Encoded lines to append, each with the date that picks its month file.
+        var lines: [(data: Data, date: Date)] = []
+        /// How many of `lines` are of each type ("glucose", "dose", …).
+        var added: [String: Int] = [:]
+        /// Records the log already has, left as they are.
+        var alreadyThere = 0
+        /// Lines that are unreadable, in the future, or of a type not imported.
+        var skipped = 0
+        var count: Int { lines.count }
+    }
+
+    static let importedTypes: Set<String> = ["glucose", "dose", "meal", "pod", "deleted"]
+
+    static func plan(importing files: [Data], existing: [HistoryLine], now: Date = Date()) -> Plan {
+        var known = Set(existing.compactMap(identity))
+        var plan = Plan()
+        let stamp = HistoryTimestamp.string(from: now)
+        let decoder = JSONDecoder()
+        for data in files {
+            for raw in data.split(separator: 0x0A) where !raw.isEmpty {
+                let lineData = Data(raw)
+                guard let line = try? decoder.decode(HistoryLine.self, from: lineData),
+                      importedTypes.contains(line.t),
+                      let date = HistoryTimestamp.formatter.date(from: line.at),
+                      date <= now.addingTimeInterval(3600),
+                      let key = identity(line),
+                      var object = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any]
+                else {
+                    plan.skipped += 1
+                    continue
+                }
+                guard !known.contains(key) else {
+                    plan.alreadyThere += 1
+                    continue
+                }
+                known.insert(key)
+                object["addedAt"] = stamp
+                object["addedVia"] = "import"
+                guard var encoded = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+                    plan.skipped += 1
+                    continue
+                }
+                encoded.append(0x0A)
+                plan.lines.append((encoded, date))
+                plan.added[line.t, default: 0] += 1
+            }
+        }
+        return plan
+    }
+
+    /// What a record is matched on: the de-duplicator's key; for a pod session,
+    /// which has none, its start and end; for a deleted note, what it deletes.
+    static func identity(_ line: HistoryLine) -> String? {
+        switch line.t {
+        case "pod":
+            return "pod|\(line.activatedAt ?? "?")|\(line.at)"
+        case "deleted":
+            return line.duplicateKey.map { "deleted|\($0)" }
+        default:
+            return line.duplicateKey
         }
     }
 }

@@ -243,6 +243,68 @@ final class HistoryLogStore {
         }
     }
 
+    /// Append lines that are already encoded (newline included), each to the
+    /// month of its date — an import's. Appends whether or not recording is on:
+    /// the owner asked for these lines. `completion`, on the main queue, gets how
+    /// many were written.
+    func appendEncoded(_ lines: [(data: Data, date: Date)], completion: @escaping (Int) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            var byMonth = [String: (date: Date, data: Data, count: Int)]()
+            for (data, date) in lines {
+                let month = Self.monthFormatter.string(from: date)
+                byMonth[month, default: (date, Data(), 0)].data.append(data)
+                byMonth[month]?.count += 1
+            }
+            var written = 0
+            for (_, batch) in byMonth.sorted(by: { $0.key < $1.key }) {
+                do {
+                    try self.write(batch.data, to: batch.date)
+                    written += batch.count
+                } catch {
+                    self.log.error("History import append failed: %{public}@", String(describing: error))
+                }
+            }
+            DispatchQueue.main.async { completion(written) }
+        }
+    }
+
+    /// The log's records dated `start` or later, read from the END of the month
+    /// files only: a day is about 1.5 MB, a month tens of megabytes. On the
+    /// store's own queue, so never half-way through an append. `completion` runs
+    /// on that queue.
+    func recentLines(since start: Date, completion: @escaping ([HistoryLine]) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let now = Date()
+            var months = [now]
+            if Self.monthFormatter.string(from: start) != Self.monthFormatter.string(from: now) {
+                months.insert(start, at: 0)
+            }
+            let decoder = JSONDecoder()
+            var lines: [HistoryLine] = []
+            for month in months {
+                guard let url = self.fileURL(for: month),
+                      let handle = try? FileHandle(forReadingFrom: url) else { continue }
+                defer { try? handle.close() }
+                let size = (try? handle.seekToEnd()) ?? 0
+                let tail: UInt64 = 8 * 1024 * 1024
+                let from = size > tail ? size - tail : 0
+                try? handle.seek(toOffset: from)
+                guard let data = try? handle.readToEnd() else { continue }
+                var chunks = data.split(separator: 0x0A)
+                // Starting part-way into the file, the first line is a fragment.
+                if from > 0, !chunks.isEmpty { chunks.removeFirst() }
+                for chunk in chunks {
+                    guard var line = try? decoder.decode(HistoryLine.self, from: Data(chunk)) else { continue }
+                    line.parsedDate = HistoryTimestamp.formatter.date(from: line.at)
+                    if let date = line.parsedDate, date >= start { lines.append(line) }
+                }
+            }
+            completion(lines)
+        }
+    }
+
     /// Seek-to-end append, creating the month's file on first write.
     private func write(_ data: Data, to date: Date) throws {
         guard let url = fileURL(for: date) else { return }

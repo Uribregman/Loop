@@ -106,8 +106,9 @@ final class HistoryStatisticsViewModel: ObservableObject {
     func glucose(since start: Date) async -> [GlucosePoint] {
         let lines = allLines
         return await Task.detached(priority: .userInitiated) {
+            // Deleted notes kept until after de-duplication, which needs them.
             let recent = lines.filter { line in
-                line.t == "glucose" && (line.date.map { $0 >= start } ?? false)
+                (line.t == "glucose" || line.t == "deleted") && (line.date.map { $0 >= start } ?? false)
             }
             return HistoryLineDeduplicator.deduplicated(recent)
                 .compactMap { line -> GlucosePoint? in

@@ -502,6 +502,10 @@ final class DeviceDataManager {
                 }
             }
         }
+
+        // Read-only: lets the history log follow readings and meals added or
+        // deleted in Loop within the last day (see `HistoryLogger.attach`).
+        historyLogger.attach(glucoseStore: glucoseStore, carbStore: carbStore)
     }
 
     var availablePumpManagers: [PumpManagerDescriptor] {

@@ -1574,7 +1574,8 @@ struct HistoryStatistics {
     static func wholeWeeks(from rawLines: [HistoryLine], overlapping start: Date,
                            calendar: Calendar = .current) -> [WeekPoint] {
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: start)?.start ?? start
-        let recent = rawLines.filter { $0.t == "glucose" && ($0.date.map { $0 >= weekStart } ?? false) }
+        // Deleted notes kept until after de-duplication, which needs them.
+        let recent = rawLines.filter { ($0.t == "glucose" || $0.t == "deleted") && ($0.date.map { $0 >= weekStart } ?? false) }
         let glucose = HistoryLineDeduplicator.deduplicated(recent).compactMap { line -> (date: Date, value: Double)? in
             guard let date = line.date, let mgdl = line.mgdl else { return nil }
             return (date, mgdl)
@@ -2026,7 +2027,7 @@ struct BasalDelivery {
     /// Every temp basal with the units it delivered.
     private let tempBasals: [(start: Date, end: Date, units: Double)]
 
-    /// - Parameter lines: de-duplicated, in file order.
+    /// - Parameter lines: de-duplicated, in file order (sorted by time here).
     init(lines: [HistoryLine], schedule: [ScheduleEntry], calendar: Calendar = .current) {
         self.versions = Self.versions(of: schedule)
         self.calendar = calendar
@@ -2035,8 +2036,19 @@ struct BasalDelivery {
         var temps: [(start: Date, end: Date, units: Double)] = []
         var suspendedSince: Date?
         var lastDate: Date?
-        for line in lines where line.t == "dose" {
-            guard let date = line.date else { continue }
+        // ⚠️ TIME ORDER, WITH SAME-SECOND TIES IN FILE ORDER. An import appends
+        // older records at the end of their month file, so file order alone is no
+        // longer time order, and a suspend paired with a resume from another day
+        // would invent a suspension lasting until then. Sorting on (time, file
+        // position) puts imported records where they belong and still keeps a
+        // suspend before the resume written with it in the same second.
+        let doses = lines.enumerated()
+            .compactMap { index, line -> (date: Date, index: Int, line: HistoryLine)? in
+                guard line.t == "dose", let date = line.date else { return nil }
+                return (date, index, line)
+            }
+            .sorted { ($0.date, $0.index) < ($1.date, $1.index) }
+        for (date, _, line) in doses {
             lastDate = max(lastDate ?? date, date)
             switch line.kind {
             case "tempBasal":
@@ -2044,10 +2056,9 @@ struct BasalDelivery {
                     stretches.append((date, end))
                     temps.append((date, end, line.units ?? 0))
                 }
-            // ⚠️ PAIRED IN FILE ORDER. A suspend and its resume often carry the
-            // same second (every pod change writes one of each), so sorting them
-            // by time can put the resume first and leave the pump "suspended"
-            // until the next pod.
+            // A suspend and its resume often carry the same second (every pod
+            // change writes one of each); the sort above keeps them in the order
+            // they were written, so the resume never comes first.
             case "suspend":
                 if suspendedSince == nil { suspendedSince = date }
             case "resume":

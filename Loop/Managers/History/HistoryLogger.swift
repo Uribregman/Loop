@@ -23,6 +23,7 @@ final class HistoryLogger {
     static let shared = HistoryLogger()
 
     private let store: HistoryLogStore
+    private let log = DiagnosticLog(category: "HistoryLogger")
 
     /// Anything that costs more than building a struct runs here, so no recording
     /// work ever lands on a caller's queue — several of these seams are on
@@ -217,7 +218,7 @@ final class HistoryLogger {
         }
     }
 
-    private func appendMealRecord(for entry: StoredCarbEntry) {
+    private func appendMealRecord(for entry: StoredCarbEntry, addedAt: String? = nil, addedVia: String? = nil) {
         let metadata = MealMetadataStore.match(entries: [entry])
         // An edit only counts as one if it actually moved: LoopKit stamps
         // userUpdatedDate on creation too in some paths.
@@ -234,8 +235,182 @@ final class HistoryLogger {
             foodType: entry.foodType,
             mealName: metadata?.name,
             mealEmoji: metadata?.emoji,
-            syncIdentifier: entry.syncIdentifier
+            syncIdentifier: entry.syncIdentifier,
+            addedAt: addedAt,
+            addedVia: addedVia
         ), at: entry.startDate)
+    }
+
+    // MARK: - Changes made in Loop within the last day
+
+    /// How far back a change made in Loop reaches the log. Older history is left
+    /// as it was recorded (the owner's choice).
+    static let editWindow: TimeInterval = 24 * 3600
+    /// How long a record must have existed before its absence is believed.
+    ///
+    /// A CGM reading is written to the log BEFORE the store saves it, so a very
+    /// new reading missing from the store proves nothing: give the store ten
+    /// minutes. A meal goes the other way (the store saves it, then the log), as
+    /// does anything added in Loop, so two minutes covers the hop to the log.
+    private static let readingDeletionDelay: TimeInterval = 10 * 60
+    private static let settleTime: TimeInterval = 2 * 60
+    /// More deletions than this at once is not a person removing a reading — it
+    /// is a store being reset or a CGM being swapped — and none is written.
+    private static let maximumDeletionsPerCheck = 10
+
+    /// Set once by `attach`; read only on `work`.
+    private weak var glucoseStore: GlucoseStore?
+    private weak var carbStore: CarbStore?
+    private var isCheckScheduled = false
+
+    /// Keep the last day of the log in step with Loop's own readings and meals.
+    ///
+    /// The live seams above record a reading or meal as it arrives. They never
+    /// see one added afterwards (a fingerstick typed in, a meal entered through
+    /// Health) or one deleted. So, a minute after either store says it changed,
+    /// the last day of the log is compared with the store: what the store has and
+    /// the log lacks is appended with the ADDED NOTE (`addedVia: "edit"`), and
+    /// what the log has and the store no longer does gets a DELETED NOTE.
+    ///
+    /// READ-ONLY towards Loop: two store reads, nothing written back. Doses are
+    /// left out on purpose: the pump reports and re-reports them, and Loop has
+    /// no way to edit one.
+    func attach(glucoseStore: GlucoseStore, carbStore: CarbStore) {
+        work.async { [weak self] in
+            self?.glucoseStore = glucoseStore
+            self?.carbStore = carbStore
+        }
+        for name in [GlucoseStore.glucoseSamplesDidChange, CarbStore.carbEntriesDidChange] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                self?.scheduleRecentCheck()
+            }
+        }
+        scheduleRecentCheck()
+    }
+
+    /// Look again once whatever was too new to judge has settled. Without this,
+    /// a change made while nothing else is arriving (a fingerstick with the CGM
+    /// warming up, a meal deleted just after it was saved) would wait for the
+    /// next unrelated change.
+    private func scheduleFollowUpCheck() {
+        work.asyncAfter(deadline: .now() + Self.readingDeletionDelay + 60) { [weak self] in
+            self?.scheduleRecentCheck()
+        }
+    }
+
+    private func scheduleRecentCheck() {
+        work.async { [weak self] in
+            guard let self, !self.isCheckScheduled else { return }
+            self.isCheckScheduled = true
+            self.work.asyncAfter(deadline: .now() + 60) { [weak self] in
+                self?.isCheckScheduled = false
+                self?.checkRecentChanges()
+            }
+        }
+    }
+
+    private func checkRecentChanges() {
+        guard store.isEnabled, let glucoseStore, let carbStore else { return }
+        let now = Date()
+        let start = now.addingTimeInterval(-Self.editWindow)
+        store.recentLines(since: start) { [weak self] lines in
+            // Each record as the log sees it now, deleted notes applied.
+            let current = HistoryLineDeduplicator.deduplicated(lines)
+            glucoseStore.getGlucoseSamples(start: start, end: nil) { result in
+                guard case .success(let samples) = result else { return }
+                self?.work.async { self?.reconcileGlucose(samples, log: current, start: start, now: now) }
+            }
+            carbStore.getCarbEntries(start: start, end: nil) { result in
+                guard case .success(let entries) = result else { return }
+                self?.work.async { self?.reconcileMeals(entries, log: current, start: start, now: now) }
+            }
+        }
+    }
+
+    private func reconcileGlucose(_ samples: [StoredGlucoseSample], log current: [HistoryLine], start: Date, now: Date) {
+        let settled = now.addingTimeInterval(-Self.settleTime)
+        let readingSettled = now.addingTimeInterval(-Self.readingDeletionDelay)
+        var inStore = Set<String>()
+        for sample in samples { if let id = sample.syncIdentifier, !id.isEmpty { inStore.insert(id) } }
+        var inLog = Set<String>()
+        var gone: [HistoryLine] = []
+        var waiting = false
+        for line in current where line.t == "glucose" {
+            guard let id = line.syncIdentifier, !id.isEmpty else { continue }
+            inLog.insert(id)
+            guard !inStore.contains(id), let date = line.parsedDate else { continue }
+            if date <= readingSettled { gone.append(line) } else { waiting = true }
+        }
+        let stamp = HistoryTimestamp.string(from: now)
+        let trendUnit = HKUnit.milligramsPerDeciliter.unitDivided(by: .minute())
+        let missing = samples.filter { sample in
+            guard let id = sample.syncIdentifier, !id.isEmpty else { return false }
+            return !inLog.contains(id) && sample.startDate >= start
+        }
+        // Judged by when the reading was SAVED where Loop records it; a reading
+        // typed in for an earlier time is ready at once.
+        let added = missing.filter { sample in sample.startDate <= settled || sample.wasUserEntered }
+        if added.count < missing.count { waiting = true }
+        if !added.isEmpty {
+            store.append(contentsOf: added.map { sample in
+                (record: GlucoseHistoryRecord(
+                    at: HistoryTimestamp.string(from: sample.startDate),
+                    mgdl: sample.quantity.doubleValue(for: .milligramsPerDeciliter),
+                    trend: sample.trend.map { String(describing: $0) },
+                    trendRate: sample.trendRate?.doubleValue(for: trendUnit),
+                    source: sample.device?.name ?? (sample.wasUserEntered ? "manual" : nil),
+                    syncIdentifier: sample.syncIdentifier,
+                    addedAt: stamp,
+                    addedVia: "edit"
+                ), date: sample.startDate)
+            })
+        }
+        appendDeletedNotes(for: gone, of: "glucose", storeIsEmpty: samples.isEmpty, stamp: stamp)
+        if waiting { scheduleFollowUpCheck() }
+    }
+
+    private func reconcileMeals(_ entries: [StoredCarbEntry], log current: [HistoryLine], start: Date, now: Date) {
+        let settled = now.addingTimeInterval(-Self.settleTime)
+        var inStore = Set<String>()
+        for entry in entries { if let id = entry.syncIdentifier, !id.isEmpty { inStore.insert(id) } }
+        var inLog = Set<String>()
+        var gone: [HistoryLine] = []
+        var waiting = false
+        for line in current where line.t == "meal" {
+            guard let id = line.syncIdentifier, !id.isEmpty else { continue }
+            inLog.insert(id)
+            guard !inStore.contains(id) else { continue }
+            // A meal can be dated ahead; what must have settled is its saving.
+            let saved = line.enteredAt.flatMap { HistoryTimestamp.formatter.date(from: $0) } ?? line.parsedDate
+            if let saved, saved <= settled { gone.append(line) } else { waiting = true }
+        }
+        let stamp = HistoryTimestamp.string(from: now)
+        for entry in entries {
+            guard let id = entry.syncIdentifier, !id.isEmpty, !inLog.contains(id) else { continue }
+            guard (entry.userCreatedDate ?? entry.startDate) <= settled else {
+                waiting = true
+                continue
+            }
+            appendMealRecord(for: entry, addedAt: stamp, addedVia: "edit")
+        }
+        // A meal deleted at once leaves nothing behind but a store
+        // notification; when it was all within this check, the empty store is
+        // not a reason to doubt it.
+        appendDeletedNotes(for: gone, of: "meal", storeIsEmpty: entries.isEmpty && gone.count > 1, stamp: stamp)
+        if waiting { scheduleFollowUpCheck() }
+    }
+
+    private func appendDeletedNotes(for lines: [HistoryLine], of type: String, storeIsEmpty: Bool, stamp: String) {
+        guard !lines.isEmpty else { return }
+        guard !storeIsEmpty, lines.count <= Self.maximumDeletionsPerCheck else {
+            log.default("Not marking %d %{public}@ records deleted: %{public}@", lines.count, type,
+                        storeIsEmpty ? "the store returned none" : "too many at once")
+            return
+        }
+        store.append(contentsOf: lines.compactMap { line -> (record: DeletedHistoryRecord, date: Date)? in
+            guard let id = line.syncIdentifier, let date = line.parsedDate else { return nil }
+            return (record: DeletedHistoryRecord(at: line.at, of: type, syncIdentifier: id, deletedAt: stamp), date: date)
+        })
     }
 
     // MARK: - Follower feed (Stage F2)

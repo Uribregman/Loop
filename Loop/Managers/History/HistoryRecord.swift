@@ -58,6 +58,30 @@ struct GlucoseHistoryRecord: Encodable {
     let source: String?
     /// The CGM's own identifier for this reading — lets a re-import de-duplicate.
     let syncIdentifier: String?
+    /// The ADDED NOTE: present only when this record reached the log after the
+    /// fact rather than as it arrived. `addedVia` is "edit" for one added in Loop
+    /// within the last day, "import" for one from an imported file.
+    var addedAt: String? = nil
+    var addedVia: String? = nil
+}
+
+/// The DELETED NOTE: a reading or meal removed in Loop, less than a day after it
+/// was recorded.
+///
+/// ⚠️ THE LOG IS NEVER EDITED IN PLACE. Append-only is what makes a crash cost at
+/// most one line, and the backup on the SSD only accepts a file that grew. So a
+/// deletion is this record, appended, and every reader drops the record it names
+/// (`HistoryLineDeduplicator`). The deleted line itself stays in the file.
+struct DeletedHistoryRecord: Encodable {
+    let v = historySchemaVersion
+    let t = "deleted"
+    /// The deleted record's own time, so this note lands in the same month file
+    /// and the same statistics period as the record it removes.
+    let at: String
+    /// What was deleted: "glucose" or "meal".
+    let of: String
+    let syncIdentifier: String
+    let deletedAt: String
 }
 
 /// One carb entry, joined to this fork's own meal metadata (name/emoji/photo)
@@ -90,6 +114,11 @@ struct MealHistoryRecord: Encodable {
     /// Meal-level emoji from MealMetadataStore.
     let mealEmoji: String?
     let syncIdentifier: String?
+    /// The ADDED NOTE: present only when this record reached the log after the
+    /// fact rather than as it arrived. `addedVia` is "edit" for one added in Loop
+    /// within the last day, "import" for one from an imported file.
+    var addedAt: String? = nil
+    var addedVia: String? = nil
 }
 
 /// One insulin dose (bolus, temp basal, suspend, …).

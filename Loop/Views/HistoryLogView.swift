@@ -11,6 +11,7 @@
 
 import SwiftUI
 import LoopKitUI
+import UniformTypeIdentifiers
 
 final class HistoryLogViewModel: ObservableObject {
     @Published var isEnabled: Bool {
@@ -41,6 +42,75 @@ final class HistoryLogViewModel: ObservableObject {
     }
 
     var totalBytes: Int64 { files.reduce(0) { $0 + $1.byteCount } }
+
+    // MARK: Import
+
+    /// What the chosen file would add, waiting for the owner's Continue.
+    @Published var importPlan: HistoryImporter.Plan?
+    @Published var importSourceName = ""
+    @Published var importMessage: String?
+    @Published private(set) var isImporting = false
+
+    /// Read the chosen files and work out what the log is missing. Nothing is
+    /// written here; `commitImport` does that after the confirmation.
+    func prepareImport(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        isImporting = true
+        importSourceName = urls.count == 1
+            ? urls[0].lastPathComponent
+            : String(format: NSLocalizedString("%d files", comment: "Number of files chosen for import"), urls.count)
+        HistoryLogStore.shared.loadFiles { [weak self] files in
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Files picked in the Files app are security-scoped.
+                let chosen: [Data] = urls.compactMap { url in
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    return try? Data(contentsOf: url)
+                }
+                let existing = HistoryLogReader.read(files: files.map(\.url))
+                let plan = HistoryImporter.plan(importing: chosen, existing: existing)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isImporting = false
+                    if chosen.isEmpty {
+                        self.importMessage = NSLocalizedString("That file could not be read.", comment: "Import: unreadable file")
+                    } else if plan.count == 0 {
+                        self.importMessage = String(format: NSLocalizedString("Nothing to add: all %d records in the file are already in your log.", comment: "Import: nothing missing"),
+                                                    plan.alreadyThere)
+                    } else {
+                        self.importPlan = plan
+                    }
+                }
+            }
+        }
+    }
+
+    func commitImport() {
+        guard let plan = importPlan else { return }
+        importPlan = nil
+        isImporting = true
+        HistoryLogStore.shared.appendEncoded(plan.lines) { [weak self] written in
+            guard let self else { return }
+            self.isImporting = false
+            self.importMessage = written == plan.count
+                ? String(format: NSLocalizedString("Added %d records to your history log.", comment: "Import: done"), written)
+                : String(format: NSLocalizedString("Added %1$d of %2$d records; the rest could not be written.", comment: "Import: partly done"), written, plan.count)
+            self.refresh()
+        }
+    }
+
+    /// "1,234 records your log is missing (glucose 1,000 · doses 200 · …)".
+    var importSummary: String {
+        guard let plan = importPlan else { return "" }
+        let names: [(String, String)] = [("glucose", NSLocalizedString("glucose", comment: "Import summary: record type")),
+                                         ("dose", NSLocalizedString("doses", comment: "Import summary: record type")),
+                                         ("meal", NSLocalizedString("meals", comment: "Import summary: record type")),
+                                         ("pod", NSLocalizedString("pods", comment: "Import summary: record type")),
+                                         ("deleted", NSLocalizedString("deleted notes", comment: "Import summary: record type"))]
+        let parts = names.compactMap { key, name in plan.added[key].map { "\(name) \($0)" } }
+        return String(format: NSLocalizedString("From %1$@: %2$d records your log is missing (%3$@). %4$d already in your log stay as they are. Nothing in your log is changed or removed, and each added record is marked as added.", comment: "Import confirmation message"),
+                      importSourceName, plan.count, parts.joined(separator: " · "), plan.alreadyThere)
+    }
 }
 
 struct HistoryLogView: View {
@@ -53,6 +123,7 @@ struct HistoryLogView: View {
     /// off never deletes anything already recorded; both questions say so.
     @State private var isAskingFirst = false
     @State private var isAskingSecond = false
+    @State private var isPickingImport = false
 
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -86,6 +157,7 @@ struct HistoryLogView: View {
                 storageSection
             }
             filesSection
+            importSection
             aboutSection
         }
         .insetGroupedListStyle()
@@ -145,6 +217,52 @@ struct HistoryLogView: View {
             }
         } footer: {
             Text("Keeps a permanent copy of your glucose readings, meals, insulin doses and pod sessions. Loop itself only keeps about 7 days, so recording starts from the moment you switch this on — earlier data cannot be recovered.", comment: "Footer explaining the history log")
+        }
+    }
+
+    /// Bring in records the log is missing, from a history file — the SSD
+    /// backup, an export, another phone's log. Add-only; see `HistoryImporter`.
+    private var importSection: some View {
+        Section {
+            Button {
+                isPickingImport = true
+            } label: {
+                HStack {
+                    Label(NSLocalizedString("Import History File", comment: "Button importing a history log file"),
+                          systemImage: "square.and.arrow.down")
+                    if viewModel.isImporting {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(viewModel.isImporting)
+        } footer: {
+            Text("Adds the records a history file has and your log is missing, for example from a backup. Nothing already in your log is changed or removed. Each added record is marked as added.", comment: "Footer explaining history import")
+        }
+        .fileImporter(isPresented: $isPickingImport, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { viewModel.prepareImport(urls) }
+        }
+        .alert(Text("Add Missing Records?", comment: "Import confirmation title"),
+               isPresented: Binding(get: { viewModel.importPlan != nil },
+                                    set: { if !$0 { viewModel.importPlan = nil } })) {
+            Button(role: .cancel) { viewModel.importPlan = nil } label: {
+                Text("Cancel", comment: "Do not import")
+            }
+            Button { viewModel.commitImport() } label: {
+                Text("Continue", comment: "Import the missing records")
+            }
+        } message: {
+            Text(viewModel.importSummary)
+        }
+        .alert(Text("History Import", comment: "Import result title"),
+               isPresented: Binding(get: { viewModel.importMessage != nil },
+                                    set: { if !$0 { viewModel.importMessage = nil } })) {
+            Button(role: .cancel) { viewModel.importMessage = nil } label: {
+                Text("OK", comment: "Dismiss the import result")
+            }
+        } message: {
+            Text(viewModel.importMessage ?? "")
         }
     }
 
