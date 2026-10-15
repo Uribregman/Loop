@@ -47,6 +47,13 @@ struct HistoryLogView: View {
     @StateObject private var viewModel = HistoryLogViewModel()
     @Environment(\.dismiss) private var dismiss
 
+    /// ⚠️ TWO QUESTIONS BEFORE RECORDING STOPS. Days not recorded can never be
+    /// recovered (Loop keeps about 7), so switching this off must not be one
+    /// stray tap. The owner asked for at least two confirmations. Switching it
+    /// off never deletes anything already recorded; both questions say so.
+    @State private var isAskingFirst = false
+    @State private var isAskingSecond = false
+
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
@@ -98,7 +105,44 @@ struct HistoryLogView: View {
     private var recordingSection: some View {
         Section {
             Toggle(NSLocalizedString("Record History", comment: "Toggle enabling the history log"),
-                   isOn: $viewModel.isEnabled)
+                   isOn: Binding(
+                    get: { viewModel.isEnabled },
+                    set: { turnOn in
+                        if turnOn {
+                            viewModel.isEnabled = true
+                        } else {
+                            // Stays on until both questions are answered.
+                            isAskingFirst = true
+                        }
+                    }))
+            .alert(Text("Turn off Record History?", comment: "First confirmation title for turning off the history log"),
+                   isPresented: $isAskingFirst) {
+                Button(role: .cancel) {} label: {
+                    Text("Cancel", comment: "Keep recording history")
+                }
+                Button {
+                    // The second alert cannot open while the first is still
+                    // closing; a moment later it can.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { isAskingSecond = true }
+                } label: {
+                    Text("Continue", comment: "Go on to turning off the history log")
+                }
+            } message: {
+                Text("Loop will stop adding to your history log. Everything already recorded stays where it is; nothing is deleted.", comment: "First confirmation message for turning off the history log")
+            }
+            .alert(Text("Are you sure?", comment: "Second confirmation title for turning off the history log"),
+                   isPresented: $isAskingSecond) {
+                Button(role: .cancel) {} label: {
+                    Text("Cancel", comment: "Keep recording history")
+                }
+                Button(role: .destructive) {
+                    viewModel.isEnabled = false
+                } label: {
+                    Text("Continue", comment: "Turn off the history log")
+                }
+            } message: {
+                Text("While it is off, nothing new is recorded: statistics, the backup and Loop Follow get no new data, and those days cannot be recovered later because Loop itself keeps only about 7 days. Your existing log files are kept.", comment: "Second confirmation message for turning off the history log")
+            }
         } footer: {
             Text("Keeps a permanent copy of your glucose readings, meals, insulin doses and pod sessions. Loop itself only keeps about 7 days, so recording starts from the moment you switch this on — earlier data cannot be recovered.", comment: "Footer explaining the history log")
         }
