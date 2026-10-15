@@ -992,9 +992,11 @@ struct HistoryStatistics {
         if stats.pods.count > 0 {
             stats.pods.meanHours = podHours.isEmpty ? 0 : podHours.reduce(0, +) / Double(podHours.count)
             stats.pods.faultRate = Double(faultCount) / Double(stats.pods.count)
+            // Ties by name: a dictionary hands them over in a different order
+            // on every launch, so equal counts used to swap places between reads.
             stats.pods.stopReasons = stopReasonCounts
                 .map { (reason: $0.key, count: $0.value) }
-                .sorted { $0.count > $1.count }
+                .sorted { $0.count != $1.count ? $0.count > $1.count : $0.reason < $1.reason }
         }
 
         return stats
